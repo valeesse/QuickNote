@@ -410,7 +410,6 @@ function HistoryPanel({
               title="清空所有未固定版本"
             >
               <Eraser className="h-3.5 w-3.5" />
-              清空
             </button>
           )}
           <button onClick={onClose} className="h-7 w-7 rounded hover:bg-gray-100 flex items-center justify-center" title="关闭">
