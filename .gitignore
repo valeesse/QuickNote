@@ -9,6 +9,7 @@ build/
 
 # Tauri
 src-tauri/target/
+server/target/
 
 # IDE
 .vscode/
