@@ -1,8 +1,14 @@
-import React, { useEffect, useState } from "react";
+import React, { Suspense, useEffect, useState } from "react";
 import { Sidebar } from "@/components/Sidebar";
-import { NoteEditor } from "@/components/NoteEditor";
 import { useNotes } from "@/hooks/useNotes";
-import type { NoteSummary, NoteVersion } from "@/types";
+import { useSync } from "@/hooks/useSync";
+import { useClipboard } from "@/hooks/useClipboard";
+import { ClipboardPanel } from "@/components/ClipboardPanel";
+import type { AppView, NoteSummary, NoteVersion, SyncConfig, SyncConfigInput, SyncStatus } from "@/types";
+
+const NoteEditor = React.lazy(() =>
+  import("@/components/NoteEditor").then((m) => ({ default: m.NoteEditor }))
+);
 
 export default function App() {
   const {
@@ -19,6 +25,7 @@ export default function App() {
     updateNote,
     deleteNote,
     togglePin,
+    loadNotes,
     loadDeletedNotes,
     restoreNote,
     undoDelete,
@@ -27,9 +34,21 @@ export default function App() {
     restoreVersion,
     toggleVersionPin,
     saveAttachment,
+    resolveAttachment,
+    flushAllDrafts,
+    refreshAfterSync,
   } = useNotes();
+  const clipboard = useClipboard();
+  const [viewMode, setViewMode] = useState<AppView>("notes");
   const [showTrash, setShowTrash] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const sync = useSync({
+    beforeSync: flushAllDrafts,
+    onSynced: async () => {
+      await Promise.all([refreshAfterSync(), clipboard.loadItems()]);
+    },
+  });
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -37,13 +56,16 @@ export default function App() {
       // Ctrl+N: New note
       if ((e.ctrlKey || e.metaKey) && e.key === "n") {
         e.preventDefault();
+        setViewMode("notes");
         createNote();
       }
       // Ctrl+F: Focus search
       if ((e.ctrlKey || e.metaKey) && e.key === "f") {
         e.preventDefault();
         const searchInput = document.querySelector<HTMLInputElement>(
-          'input[placeholder="搜索便签..."]'
+          viewMode === "notes"
+            ? 'input[placeholder="搜索便签..."]'
+            : 'input[placeholder="搜索剪贴板历史"]'
         );
         searchInput?.focus();
       }
@@ -55,12 +77,15 @@ export default function App() {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [createNote, undoDelete]);
+  }, [createNote, undoDelete, viewMode]);
 
   return (
     <div className="flex h-screen overflow-hidden">
       {/* Sidebar */}
       <Sidebar
+        viewMode={viewMode}
+        onViewModeChange={setViewMode}
+        clipboardCount={clipboard.items.length}
         notes={notes}
         activeNoteId={activeNote?.id ?? null}
         searchQuery={searchQuery}
@@ -73,26 +98,68 @@ export default function App() {
           await loadDeletedNotes();
           setShowTrash(true);
         }}
+        syncStatus={sync.status}
+        onSync={() => void sync.syncNow()}
+        onOpenSettings={() => setShowSettings(true)}
       />
 
       {/* Main Content */}
-      <div className="flex-1 flex flex-col bg-white">
-        {activeNote ? (
-          <NoteEditor
-            note={activeNote}
-            onUpdate={updateNote}
-            onSaveAttachment={saveAttachment}
-            onOpenHistory={async () => {
-              await loadVersions(activeNote.id);
-              setShowHistory(true);
-            }}
-            saveStatus={saveStatus}
-            errorMessage={errorMessage}
+      <div className="flex min-w-0 flex-1 flex-col bg-white pb-14 md:pb-0">
+        {viewMode === "clipboard" ? (
+          <ClipboardPanel
+            items={clipboard.items}
+            query={clipboard.query}
+            autoCaptureSupported={clipboard.autoCaptureSupported}
+            autoCaptureEnabled={clipboard.autoCaptureEnabled}
+            copiedId={clipboard.copiedId}
+            error={clipboard.error}
+            onQueryChange={clipboard.setQuery}
+            onCapture={() => void clipboard.capture()}
+            onAutoCaptureChange={clipboard.setAutoCaptureEnabled}
+            onCopy={(id) => void clipboard.copyItem(id)}
+            onTogglePin={(id) => void clipboard.togglePin(id)}
+            onDelete={(id) => void clipboard.deleteItem(id)}
           />
-        ) : (
-          <EmptyState onCreateNote={createNote} />
-        )}
+        ) : <>
+          <div className="flex items-center gap-2 border-b border-gray-200 bg-white px-3 py-2 md:hidden">
+            <select
+              value={activeNote?.id ?? ""}
+              onChange={(event) => event.target.value && void selectNote(event.target.value)}
+              className="min-w-0 flex-1 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm"
+            >
+              <option value="">选择便签</option>
+              {notes.map((note) => <option key={note.id} value={note.id}>{note.title}</option>)}
+            </select>
+            <button onClick={() => void createNote()} className="rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white">新建</button>
+          </div>
+          <Suspense fallback={<EditorSkeleton />}>
+          {activeNote ? (
+            <NoteEditor
+              note={activeNote}
+              onUpdate={updateNote}
+              onSaveAttachment={saveAttachment}
+              onResolveAttachment={resolveAttachment}
+              onOpenHistory={async () => {
+                await loadVersions(activeNote.id);
+                setShowHistory(true);
+              }}
+              saveStatus={saveStatus}
+              errorMessage={errorMessage}
+              isSyncing={sync.status === "syncing"}
+            />
+          ) : (
+            <EmptyState onCreateNote={createNote} />
+          )}
+          </Suspense>
+        </>}
       </div>
+
+      <nav className="fixed inset-x-0 bottom-0 z-30 grid h-14 grid-cols-4 border-t border-gray-200 bg-white/95 px-2 backdrop-blur md:hidden">
+        <button onClick={() => setViewMode("notes")} className={viewMode === "notes" ? "text-blue-600" : "text-gray-500"}>便签</button>
+        <button onClick={() => setViewMode("clipboard")} className={viewMode === "clipboard" ? "text-violet-600" : "text-gray-500"}>剪贴板</button>
+        <button onClick={() => void sync.syncNow()} className="text-gray-500">同步</button>
+        <button onClick={() => setShowSettings(true)} className="text-gray-500">设置</button>
+      </nav>
 
       {errorMessage && (
         <div className="fixed right-4 bottom-4 max-w-sm rounded border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow">
@@ -117,6 +184,131 @@ export default function App() {
           onTogglePin={(versionId) => toggleVersionPin(activeNote.id, versionId)}
         />
       )}
+
+      {showSettings && (
+        <SyncSettingsPanel
+          config={sync.config}
+          status={sync.status}
+          error={sync.error}
+          onClose={() => setShowSettings(false)}
+          onSave={sync.saveConfig}
+          onSync={sync.syncNow}
+        />
+      )}
+    </div>
+  );
+}
+
+function SyncSettingsPanel({
+  config,
+  status,
+  error,
+  onClose,
+  onSave,
+  onSync,
+}: {
+  config: SyncConfig | null;
+  status: SyncStatus;
+  error: string | null;
+  onClose: () => void;
+  onSave: (input: SyncConfigInput) => Promise<SyncConfig>;
+  onSync: () => Promise<boolean>;
+}) {
+  const [enabled, setEnabled] = useState(config?.enabled ?? false);
+  const [endpoint, setEndpoint] = useState(config?.endpoint ?? "");
+  const [username, setUsername] = useState(config?.username ?? "");
+  const [password, setPassword] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!config) return;
+    setEnabled(config.enabled);
+    setEndpoint(config.endpoint);
+    setUsername(config.username);
+  }, [config]);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await onSave({
+        enabled,
+        provider: "webdav",
+        endpoint,
+        username,
+        password: password || undefined,
+      });
+      setPassword("");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end bg-black/20" onMouseDown={onClose}>
+      <div
+        className="h-full w-full max-w-sm border-l border-gray-200 bg-white shadow-xl"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
+          <h2 className="text-sm font-semibold text-gray-800">数据同步</h2>
+          <button onClick={onClose} className="h-7 w-7 rounded hover:bg-gray-100" title="关闭">×</button>
+        </div>
+        <div className="space-y-5 p-5">
+          <label className="flex items-center justify-between text-sm text-gray-700">
+            <span>启用 WebDAV 同步</span>
+            <input
+              type="checkbox"
+              checked={enabled}
+              onChange={(event) => setEnabled(event.target.checked)}
+              className="h-4 w-4 accent-blue-600"
+            />
+          </label>
+          <label className="block text-sm text-gray-600">
+            <span className="mb-1.5 block">服务器目录</span>
+            <input
+              value={endpoint}
+              onChange={(event) => setEndpoint(event.target.value)}
+              placeholder="https://dav.example.com/QuickNote"
+              className="w-full rounded border border-gray-200 px-3 py-2 outline-none focus:border-blue-500"
+            />
+          </label>
+          <label className="block text-sm text-gray-600">
+            <span className="mb-1.5 block">用户名</span>
+            <input
+              value={username}
+              onChange={(event) => setUsername(event.target.value)}
+              className="w-full rounded border border-gray-200 px-3 py-2 outline-none focus:border-blue-500"
+            />
+          </label>
+          <label className="block text-sm text-gray-600">
+            <span className="mb-1.5 block">应用密码</span>
+            <input
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              placeholder={config?.enabled ? "留空则保持不变" : "WebDAV 应用密码"}
+              className="w-full rounded border border-gray-200 px-3 py-2 outline-none focus:border-blue-500"
+            />
+          </label>
+          {error && <p className="rounded bg-red-50 px-3 py-2 text-xs text-red-700">{error}</p>}
+          <div className="flex items-center gap-2 border-t border-gray-100 pt-4">
+            <button
+              onClick={() => void save()}
+              disabled={saving}
+              className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+            >
+              {saving ? "保存中" : "保存配置"}
+            </button>
+            <button
+              onClick={() => void onSync()}
+              disabled={!config?.enabled || status === "syncing"}
+              className="rounded px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-40"
+            >
+              {status === "syncing" ? "同步中" : "立即同步"}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -252,6 +444,30 @@ function PinIcon() {
     <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 4l6 6-3 1-4 4v5l-2 2-2-7-7-2 2-2h5l4-4 1-3z" />
     </svg>
+  );
+}
+
+function EditorSkeleton() {
+  return (
+    <div className="flex flex-col h-full animate-pulse">
+      {/* Toolbar skeleton */}
+      <div className="px-8 py-2 border-b border-gray-100 flex items-center gap-2">
+        {Array.from({ length: 12 }).map((_, i) => (
+          <div key={i} className="w-7 h-7 rounded bg-gray-100" />
+        ))}
+      </div>
+      {/* Content skeleton */}
+      <div className="flex-1 px-8 py-6 space-y-4">
+        <div className="h-5 w-3/4 rounded bg-gray-100" />
+        <div className="h-4 w-full rounded bg-gray-50" />
+        <div className="h-4 w-5/6 rounded bg-gray-50" />
+        <div className="h-4 w-2/3 rounded bg-gray-50" />
+      </div>
+      {/* Status bar skeleton */}
+      <div className="px-8 py-2 border-t border-gray-100">
+        <div className="h-3 w-20 rounded bg-gray-100" />
+      </div>
+    </div>
   );
 }
 

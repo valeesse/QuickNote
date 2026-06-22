@@ -1,6 +1,22 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import { convertFileSrc, invoke } from "@/utils/tauri";
+import { convertFileSrc, invoke, isTauri } from "@/utils/tauri";
 import type { Attachment, Note, NoteSummary, NoteVersion, SaveStatus } from "@/types";
+
+interface DraftState {
+  content: string;
+  revision: number;
+  persistedRevision: number;
+  timer: ReturnType<typeof setTimeout> | null;
+  retryTimer: ReturnType<typeof setTimeout> | null;
+  inFlight: Promise<boolean> | null;
+}
+
+interface DraftJournal {
+  schemaVersion: 1;
+  drafts: Record<string, { content: string; updatedAt: string }>;
+}
+
+const DRAFT_JOURNAL_KEY = "quicknote-draft-journal-v1";
 
 export function useNotes() {
   const [notes, setNotes] = useState<NoteSummary[]>([]);
@@ -11,15 +27,21 @@ export function useNotes() {
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [initialDrafts] = useState(loadDraftJournal);
+  const draftsRef = useRef<Map<string, DraftState>>(initialDrafts);
   const activeNoteIdRef = useRef<string | null>(null);
   const lastDeletedIdRef = useRef<string | null>(null);
+  const loadRequestRef = useRef(0);
+  const selectRequestRef = useRef(0);
+  const flushAllDraftsRef = useRef<() => Promise<boolean>>(async () => true);
+  const draftRecoveryRef = useRef<Promise<void> | null>(null);
 
   useEffect(() => {
     activeNoteIdRef.current = activeNote?.id ?? null;
   }, [activeNote?.id]);
 
   const loadNotes = useCallback(async () => {
+    const requestId = ++loadRequestRef.current;
     try {
       setIsLoading(true);
       setErrorMessage(null);
@@ -27,58 +49,27 @@ export function useNotes() {
         const results = await invoke<NoteSummary[]>("search_notes", {
           query: searchQuery,
         });
-        setNotes(results);
+        if (requestId === loadRequestRef.current) setNotes(results);
       } else {
         const results = await invoke<NoteSummary[]>("list_notes");
-        setNotes(results);
+        if (requestId === loadRequestRef.current) setNotes(results);
       }
     } catch (err) {
       console.error("Failed to load notes:", err);
       setErrorMessage(getErrorMessage(err));
     } finally {
-      setIsLoading(false);
+      if (requestId === loadRequestRef.current) setIsLoading(false);
     }
   }, [searchQuery]);
 
-  const createNote = useCallback(async () => {
-    try {
-      setErrorMessage(null);
-      const note = await invoke<Note>("create_note", { content: "" });
-      await loadNotes();
-      // Load the full note to set as active
-      const fullNote = await invoke<Note | null>("get_note", { id: note.id });
-      if (fullNote) {
-        setActiveNote(fullNote);
-      }
-      return note;
-    } catch (err) {
-      console.error("Failed to create note:", err);
-      setErrorMessage(getErrorMessage(err));
-    }
-  }, [loadNotes]);
-
-  const selectNote = useCallback(async (id: string) => {
-    try {
-      setErrorMessage(null);
-      const note = await invoke<Note | null>("get_note", { id });
-      if (note) {
-        setActiveNote(note);
-      }
-    } catch (err) {
-      console.error("Failed to load note:", err);
-      setErrorMessage(getErrorMessage(err));
-    }
-  }, []);
-
   const saveWithRetry = useCallback(
-    async (id: string, content: string, attempts = 3): Promise<Note | null> => {
+    async (id: string, content: string, attempts = 3): Promise<Note> => {
       let lastError: unknown;
       for (let attempt = 1; attempt <= attempts; attempt += 1) {
         try {
-          setSaveStatus(attempt === 1 ? "saving" : "retrying");
+          if (attempt > 1 && activeNoteIdRef.current === id) setSaveStatus("retrying");
           const updated = await invoke<Note | null>("update_note", { id, content });
-          setSaveStatus("saved");
-          setErrorMessage(null);
+          if (!updated) throw new Error("便签已不存在或已被删除");
           return updated;
         } catch (err) {
           lastError = err;
@@ -87,12 +78,168 @@ export function useNotes() {
           }
         }
       }
-
-      setSaveStatus("error");
-      setErrorMessage(getErrorMessage(lastError));
-      return null;
+      throw lastError;
     },
     []
+  );
+
+  const flushDraft = useCallback(
+    async (id: string): Promise<boolean> => {
+      const draft = draftsRef.current.get(id);
+      if (!draft) return true;
+
+      if (draft.timer) {
+        clearTimeout(draft.timer);
+        draft.timer = null;
+      }
+      if (draft.retryTimer) {
+        clearTimeout(draft.retryTimer);
+        draft.retryTimer = null;
+      }
+      if (draft.inFlight) return draft.inFlight;
+
+      const task = (async () => {
+        while (draft.persistedRevision < draft.revision) {
+          const targetRevision = draft.revision;
+          const targetContent = draft.content;
+          if (activeNoteIdRef.current === id) setSaveStatus("saving");
+
+          try {
+            const updated = await saveWithRetry(id, targetContent);
+            draft.persistedRevision = targetRevision;
+            setErrorMessage(null);
+
+            if (draft.revision === targetRevision) {
+              setNotes((current) =>
+                current.map((summary) =>
+                  summary.id === id
+                    ? {
+                        ...summary,
+                        title: updated.title,
+                        preview: createSummaryFromContent(updated.content).preview,
+                        updated_at: updated.updated_at,
+                      }
+                    : summary
+                )
+              );
+
+              if (activeNoteIdRef.current === id) {
+                setActiveNote(updated);
+                setSaveStatus("saved");
+              }
+            }
+          } catch (err) {
+            const message = getErrorMessage(err);
+            setErrorMessage(message);
+            if (activeNoteIdRef.current === id) setSaveStatus("error");
+            draft.retryTimer = setTimeout(() => void flushDraft(id), 5_000);
+            return false;
+          }
+        }
+
+        return true;
+      })();
+
+      draft.inFlight = task;
+      try {
+        return await task;
+      } finally {
+        draft.inFlight = null;
+        if (draft.persistedRevision >= draft.revision && !draft.retryTimer) {
+          draftsRef.current.delete(id);
+          try {
+            persistDraftJournal(draftsRef.current);
+          } catch (err) {
+            console.error("Failed to clean persisted draft:", err);
+          }
+        }
+      }
+    },
+    [saveWithRetry]
+  );
+
+  const flushAllDrafts = useCallback(async (): Promise<boolean> => {
+    if (draftRecoveryRef.current) {
+      try {
+        await draftRecoveryRef.current;
+      } catch {
+        return false;
+      }
+    }
+    const ids = Array.from(draftsRef.current.keys());
+    const results = await Promise.all(ids.map((id) => flushDraft(id)));
+    return results.every(Boolean);
+  }, [flushDraft]);
+
+  const refreshAfterSync = useCallback(async () => {
+    await loadNotes();
+    const activeId = activeNoteIdRef.current;
+    if (!activeId) return;
+
+    const note = await invoke<Note | null>("get_note", { id: activeId });
+    if (activeNoteIdRef.current !== activeId) return;
+    setActiveNote(note);
+    if (!note) activeNoteIdRef.current = null;
+  }, [loadNotes]);
+
+  useEffect(() => {
+    flushAllDraftsRef.current = flushAllDrafts;
+  }, [flushAllDrafts]);
+
+  useEffect(() => {
+    if (draftRecoveryRef.current || draftsRef.current.size === 0) return;
+    const recovery = (async () => {
+      for (const [id, draft] of Array.from(draftsRef.current.entries())) {
+        const note = await invoke<Note | null>("get_note", { id });
+        if (note) continue;
+        await invoke<Note>("create_note", { content: draft.content });
+        draftsRef.current.delete(id);
+      }
+      persistDraftJournal(draftsRef.current);
+    })();
+    draftRecoveryRef.current = recovery;
+    void recovery
+      .then(async () => {
+        await flushAllDrafts();
+        await loadNotes();
+      })
+      .catch((err) => setErrorMessage(`草稿恢复失败：${getErrorMessage(err)}`));
+  }, [flushAllDrafts, loadNotes]);
+
+  const createNote = useCallback(async () => {
+    try {
+      if (!(await flushAllDrafts())) return;
+      setErrorMessage(null);
+      const note = await invoke<Note>("create_note", { content: "" });
+      activeNoteIdRef.current = note.id;
+      setActiveNote(note);
+      await loadNotes();
+      return note;
+    } catch (err) {
+      console.error("Failed to create note:", err);
+      setErrorMessage(getErrorMessage(err));
+    }
+  }, [flushAllDrafts, loadNotes]);
+
+  const selectNote = useCallback(
+    async (id: string) => {
+      const requestId = ++selectRequestRef.current;
+      try {
+        const currentId = activeNoteIdRef.current;
+        if (currentId && currentId !== id && !(await flushDraft(currentId))) return;
+        setErrorMessage(null);
+        const note = await invoke<Note | null>("get_note", { id });
+        if (note && requestId === selectRequestRef.current) {
+          const draft = draftsRef.current.get(id);
+          activeNoteIdRef.current = id;
+          setActiveNote(draft ? { ...note, content: draft.content } : note);
+        }
+      } catch (err) {
+        console.error("Failed to load note:", err);
+        setErrorMessage(getErrorMessage(err));
+      }
+    },
+    [flushDraft]
   );
 
   const updateNote = useCallback(
@@ -112,29 +259,42 @@ export function useNotes() {
         )
       );
 
-      // Debounced save - wait 500ms after last keystroke
-      if (saveTimerRef.current) {
-        clearTimeout(saveTimerRef.current);
+      let draft = draftsRef.current.get(id);
+      if (!draft) {
+        draft = {
+          content,
+          revision: 0,
+          persistedRevision: 0,
+          timer: null,
+          retryTimer: null,
+          inFlight: null,
+        };
+        draftsRef.current.set(id, draft);
       }
 
-      setSaveStatus("saving");
-      saveTimerRef.current = setTimeout(async () => {
-        const updated = await saveWithRetry(id, content);
-        if (updated) {
-          if (activeNoteIdRef.current === id) {
-            setActiveNote(updated);
-          }
-          loadNotes();
-        }
-      }, 500);
+      draft.content = content;
+      draft.revision += 1;
+      if (draft.timer) clearTimeout(draft.timer);
+      if (draft.retryTimer) {
+        clearTimeout(draft.retryTimer);
+        draft.retryTimer = null;
+      }
+      try {
+        persistDraftJournal(draftsRef.current);
+      } catch (err) {
+        setErrorMessage(`草稿保护写入失败：${getErrorMessage(err)}`);
+      }
+      if (activeNoteIdRef.current === id) setSaveStatus("saving");
+      draft.timer = setTimeout(() => void flushDraft(id), 500);
     },
-    [loadNotes, saveWithRetry]
+    [flushDraft]
   );
 
   const deleteNote = useCallback(
     async (id: string) => {
       try {
         setErrorMessage(null);
+        if (!(await flushDraft(id))) return;
         await invoke("delete_note", { id });
         lastDeletedIdRef.current = id;
         if (activeNote?.id === id) {
@@ -146,7 +306,7 @@ export function useNotes() {
         setErrorMessage(getErrorMessage(err));
       }
     },
-    [activeNote, loadNotes]
+    [activeNote, flushDraft, loadNotes]
   );
 
   const togglePin = useCallback(
@@ -206,6 +366,9 @@ export function useNotes() {
     async (id: string) => {
       try {
         await invoke("purge_note", { id });
+        draftsRef.current.delete(id);
+        persistDraftJournal(draftsRef.current);
+        await invoke("cleanup_attachments");
         await loadDeletedNotes();
       } catch (err) {
         console.error("Failed to purge note:", err);
@@ -235,6 +398,13 @@ export function useNotes() {
           versionId,
         });
         if (restored) {
+          draftsRef.current.delete(noteId);
+          try {
+            persistDraftJournal(draftsRef.current);
+          } catch (err) {
+            console.error("Failed to clean restored draft:", err);
+          }
+          activeNoteIdRef.current = noteId;
           setActiveNote(restored);
           await loadNotes();
           await loadVersions(noteId);
@@ -262,19 +432,51 @@ export function useNotes() {
 
   const saveAttachment = useCallback(async (dataUrl: string, filename: string) => {
     const attachment = await invoke<Attachment>("save_attachment", { dataUrl, filename });
+    return { ...attachment, path: convertFileSrc(attachment.path) };
+  }, []);
+
+  const resolveAttachment = useCallback(async (id: string) => {
+    const attachment = await invoke<Attachment>("get_attachment", { id });
     return convertFileSrc(attachment.path);
   }, []);
 
-  // Load notes on mount and when search changes
+  // Load notes on mount and after a short search debounce.
   useEffect(() => {
-    loadNotes();
+    const timer = setTimeout(() => void loadNotes(), searchQuery.trim() ? 200 : 0);
+    return () => clearTimeout(timer);
   }, [loadNotes]);
 
   useEffect(() => {
+    const flushWhenHidden = () => {
+      if (document.visibilityState === "hidden") void flushAllDraftsRef.current();
+    };
+    const retryWhenOnline = () => void flushAllDraftsRef.current();
+    document.addEventListener("visibilitychange", flushWhenHidden);
+    window.addEventListener("online", retryWhenOnline);
     return () => {
-      if (saveTimerRef.current) {
-        clearTimeout(saveTimerRef.current);
-      }
+      document.removeEventListener("visibilitychange", flushWhenHidden);
+      window.removeEventListener("online", retryWhenOnline);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isTauri() || !(window as any).__TAURI_INTERNALS__?.metadata?.currentWindow) return;
+
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void import("@tauri-apps/api/window").then(async ({ getCurrentWindow }) => {
+      if (disposed) return;
+      const windowHandle = getCurrentWindow();
+      unlisten = await windowHandle.onCloseRequested(async (event) => {
+        event.preventDefault();
+        const saved = await flushAllDraftsRef.current();
+        if (saved) await windowHandle.destroy();
+      });
+    });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
     };
   }, []);
 
@@ -302,7 +504,54 @@ export function useNotes() {
     restoreVersion,
     toggleVersionPin,
     saveAttachment,
+    resolveAttachment,
+    flushAllDrafts,
+    refreshAfterSync,
   };
+}
+
+function loadDraftJournal(): Map<string, DraftState> {
+  const drafts = new Map<string, DraftState>();
+  if (typeof window === "undefined") return drafts;
+
+  try {
+    const raw = window.localStorage.getItem(DRAFT_JOURNAL_KEY);
+    if (!raw) return drafts;
+    const journal = JSON.parse(raw) as Partial<DraftJournal>;
+    if (journal.schemaVersion !== 1 || !journal.drafts || typeof journal.drafts !== "object") {
+      return drafts;
+    }
+    for (const [id, entry] of Object.entries(journal.drafts)) {
+      if (!id || !entry || typeof entry.content !== "string") continue;
+      drafts.set(id, {
+        content: entry.content,
+        revision: 1,
+        persistedRevision: 0,
+        timer: null,
+        retryTimer: null,
+        inFlight: null,
+      });
+    }
+  } catch (err) {
+    console.error("Failed to read draft journal:", err);
+  }
+  return drafts;
+}
+
+function persistDraftJournal(drafts: Map<string, DraftState>): void {
+  if (typeof window === "undefined") return;
+  const entries: DraftJournal["drafts"] = {};
+  const updatedAt = new Date().toISOString();
+  for (const [id, draft] of drafts) {
+    if (draft.persistedRevision >= draft.revision) continue;
+    entries[id] = { content: draft.content, updatedAt };
+  }
+  if (Object.keys(entries).length === 0) {
+    window.localStorage.removeItem(DRAFT_JOURNAL_KEY);
+    return;
+  }
+  const journal: DraftJournal = { schemaVersion: 1, drafts: entries };
+  window.localStorage.setItem(DRAFT_JOURNAL_KEY, JSON.stringify(journal));
 }
 
 function getErrorMessage(err: unknown): string {

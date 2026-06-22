@@ -1,4 +1,6 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef } from "react";
+import { Extension, InputRule } from "@tiptap/core";
+import type { MarkType } from "@tiptap/pm/model";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Image from "@tiptap/extension-image";
@@ -8,33 +10,54 @@ import TaskItem from "@tiptap/extension-task-item";
 import Highlight from "@tiptap/extension-highlight";
 import Typography from "@tiptap/extension-typography";
 import { Markdown } from "@tiptap/markdown";
-import type { Note, SaveStatus } from "@/types";
+import type { Attachment, Note, SaveStatus } from "@/types";
 
-type EditorViewMode = "edit" | "source" | "preview";
+const AttachmentImage = Image.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      attachmentId: {
+        default: null,
+        parseHTML: (element) =>
+          element.getAttribute("data-attachment-id") ||
+          element.getAttribute("src")?.match(/^attachment:\/\/(.+)$/)?.[1] ||
+          null,
+        renderHTML: (attributes) =>
+          attributes.attachmentId
+            ? { "data-attachment-id": attributes.attachmentId }
+            : {},
+      },
+    };
+  },
+});
 
 interface NoteEditorProps {
   note: Note;
   onUpdate: (id: string, content: string) => void;
-  onSaveAttachment: (dataUrl: string, filename: string) => Promise<string>;
+  onSaveAttachment: (dataUrl: string, filename: string) => Promise<Attachment>;
+  onResolveAttachment: (id: string) => Promise<string>;
   onOpenHistory: () => void;
   saveStatus: SaveStatus;
   errorMessage: string | null;
+  isSyncing: boolean;
 }
 
 export function NoteEditor({
   note,
   onUpdate,
   onSaveAttachment,
+  onResolveAttachment,
   onOpenHistory,
   saveStatus,
   errorMessage,
+  isSyncing,
 }: NoteEditorProps) {
   const noteIdRef = useRef(note.id);
   const onUpdateRef = useRef(onUpdate);
   const editorRef = useRef<any>(null);
+  const lastAppliedContentRef = useRef(note.content || "");
+  const isApplyingExternalContentRef = useRef(note.content.includes("attachment://"));
   const migratedNotesRef = useRef<Set<string>>(new Set());
-  const [viewMode, setViewMode] = useState<EditorViewMode>("edit");
-  const [markdownSource, setMarkdownSource] = useState("");
 
   useEffect(() => {
     noteIdRef.current = note.id;
@@ -44,8 +67,12 @@ export function NoteEditor({
   const handleImageInsert = useCallback(async (file: File) => {
     try {
       const dataUrl = await compressImageToDataUrl(file);
-      const src = await onSaveAttachment(dataUrl, file.name);
-      editorRef.current?.chain().focus().setImage({ src, alt: file.name }).run();
+      const attachment = await onSaveAttachment(dataUrl, file.name);
+      editorRef.current?.chain().focus().setImage({
+        src: attachment.path,
+        alt: file.name,
+        attachmentId: attachment.id,
+      } as any).run();
     } catch (err) {
       console.error("Image insert failed:", err);
     }
@@ -63,7 +90,7 @@ export function NoteEditor({
           },
         },
       }),
-      Image.configure({
+      AttachmentImage.configure({
         inline: false,
         allowBase64: true,
         HTMLAttributes: {
@@ -81,6 +108,7 @@ export function NoteEditor({
         multicolor: false,
       }),
       Typography,
+      InlineMarkdownMarkRules,
       Markdown.configure({
         indentation: {
           style: "space",
@@ -88,9 +116,11 @@ export function NoteEditor({
         },
       }),
     ],
-    content: note.content || "",
+    content: note.content.includes("attachment://") ? "" : note.content || "",
     onUpdate: ({ editor }) => {
-      const html = editor.getHTML();
+      if (isApplyingExternalContentRef.current) return;
+      const html = canonicalizeAttachmentReferences(editor.getHTML());
+      lastAppliedContentRef.current = html;
       onUpdateRef.current(noteIdRef.current, html);
     },
     editorProps: {
@@ -134,21 +164,30 @@ export function NoteEditor({
   }, [editor]);
 
   useEffect(() => {
-    editor?.setEditable(viewMode !== "preview");
-    if (editor && viewMode === "source") {
-      setMarkdownSource(editor.getMarkdown());
-    }
-  }, [editor, viewMode]);
+    editor?.setEditable(!isSyncing);
+  }, [editor, isSyncing]);
 
-  // Update editor content when note changes
   useEffect(() => {
-    if (editor && note.content !== editor.getHTML()) {
-      editor.commands.setContent(note.content || "", { emitUpdate: false });
-      if (viewMode === "source") {
-        setMarkdownSource(editor.getMarkdown());
+    if (!editor) return;
+    const nextContent = note.content || "";
+    let cancelled = false;
+    isApplyingExternalContentRef.current = true;
+    void (async () => {
+      try {
+        const hydrated = await hydrateAttachmentReferences(nextContent, onResolveAttachment);
+        if (cancelled) return;
+        if (nextContent !== lastAppliedContentRef.current || editor.isEmpty) {
+          editor.commands.setContent(hydrated, { emitUpdate: false });
+          lastAppliedContentRef.current = nextContent;
+        }
+      } finally {
+        if (!cancelled) isApplyingExternalContentRef.current = false;
       }
-    }
-  }, [editor, note.id, note.content, viewMode]);
+    })().catch((err) => console.error("Attachment hydration failed:", err));
+    return () => {
+      cancelled = true;
+    };
+  }, [editor, note.id, note.content, onResolveAttachment]);
 
   useEffect(() => {
     if (!note.content.includes("data:image/") || migratedNotesRef.current.has(note.id)) return;
@@ -158,7 +197,9 @@ export function NoteEditor({
     const migrate = async () => {
       const nextContent = await migrateDataUrlImages(note.content, onSaveAttachment);
       if (!cancelled && nextContent !== note.content) {
-        editor?.commands.setContent(nextContent, { emitUpdate: false });
+        const hydrated = await hydrateAttachmentReferences(nextContent, onResolveAttachment);
+        editor?.commands.setContent(hydrated, { emitUpdate: false });
+        lastAppliedContentRef.current = nextContent;
         onUpdate(note.id, nextContent);
       }
     };
@@ -167,45 +208,25 @@ export function NoteEditor({
     return () => {
       cancelled = true;
     };
-  }, [editor, note.content, note.id, onSaveAttachment, onUpdate]);
+  }, [editor, note.content, note.id, onResolveAttachment, onSaveAttachment, onUpdate]);
 
   if (!editor) return null;
 
-  const handleMarkdownSourceChange = (value: string) => {
-    setMarkdownSource(value);
-    editor.commands.setContent(value, {
-      contentType: "markdown",
-      emitUpdate: false,
-    });
-    onUpdateRef.current(noteIdRef.current, editor.getHTML());
-  };
-
   return (
-    <div className="flex flex-col h-full">
-      {/* Toolbar */}
-      <Toolbar
-        editor={editor}
-        note={note}
-        onSaveAttachment={onSaveAttachment}
-        viewMode={viewMode}
-        onViewModeChange={setViewMode}
-      />
+    <div className="relative flex h-full flex-col" aria-busy={isSyncing}>
+      {isSyncing && (
+        <div className="absolute inset-0 z-20 flex items-start justify-center bg-white/30 pt-16 cursor-wait">
+          <span className="rounded bg-gray-800 px-3 py-1.5 text-xs text-white shadow">
+            同步中，编辑暂时锁定
+          </span>
+        </div>
+      )}
+      <Toolbar editor={editor} note={note} onSaveAttachment={onSaveAttachment} />
 
-      {/* Editor Content */}
       <div className="flex-1 overflow-y-auto">
-        {viewMode === "source" ? (
-          <textarea
-            value={markdownSource}
-            onChange={(event) => handleMarkdownSourceChange(event.target.value)}
-            className="h-full min-h-full w-full resize-none border-0 bg-gray-950 px-8 py-6 font-mono text-sm leading-6 text-gray-100 outline-none"
-            spellCheck={false}
-          />
-        ) : (
-          <EditorContent editor={editor} />
-        )}
+        <EditorContent editor={editor} />
       </div>
 
-      {/* Status Bar */}
       <div className="px-8 py-2 border-t border-gray-100 flex items-center justify-between text-xs text-gray-400">
         <span>
           {new Date(note.updated_at).toLocaleString("zh-CN", {
@@ -226,22 +247,15 @@ export function NoteEditor({
   );
 }
 
-// Toolbar Component
 function Toolbar({
   editor,
   note,
   onSaveAttachment,
-  viewMode,
-  onViewModeChange,
 }: {
   editor: any;
   note: Note;
-  onSaveAttachment: (dataUrl: string, filename: string) => Promise<string>;
-  viewMode: EditorViewMode;
-  onViewModeChange: (mode: EditorViewMode) => void;
+  onSaveAttachment: (dataUrl: string, filename: string) => Promise<Attachment>;
 }) {
-  const editingDisabled = viewMode !== "edit";
-
   const addImage = useCallback(() => {
     const input = document.createElement("input");
     input.type = "file";
@@ -250,8 +264,12 @@ function Toolbar({
       const file = e.target.files?.[0];
       if (file) {
         const dataUrl = await compressImageToDataUrl(file);
-        const src = await onSaveAttachment(dataUrl, file.name);
-        editor.chain().focus().setImage({ src, alt: file.name }).run();
+        const attachment = await onSaveAttachment(dataUrl, file.name);
+        editor.chain().focus().setImage({
+          src: attachment.path,
+          alt: file.name,
+          attachmentId: attachment.id,
+        } as any).run();
       }
     };
     input.click();
@@ -271,8 +289,7 @@ function Toolbar({
   }, [editor]);
 
   const copyMarkdown = useCallback(async () => {
-    const markdown = editor.getMarkdown();
-    await navigator.clipboard.writeText(markdown);
+    await navigator.clipboard.writeText(editor.getMarkdown());
   }, [editor]);
 
   const exportMarkdown = useCallback(() => {
@@ -291,7 +308,6 @@ function Toolbar({
       <ToolbarButton
         onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}
         active={editor.isActive("heading", { level: 1 })}
-        disabled={editingDisabled}
         title="标题 1"
       >
         H1
@@ -299,7 +315,6 @@ function Toolbar({
       <ToolbarButton
         onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}
         active={editor.isActive("heading", { level: 2 })}
-        disabled={editingDisabled}
         title="标题 2"
       >
         H2
@@ -307,18 +322,16 @@ function Toolbar({
       <ToolbarButton
         onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}
         active={editor.isActive("heading", { level: 3 })}
-        disabled={editingDisabled}
         title="标题 3"
       >
         H3
       </ToolbarButton>
 
-      <div className="w-px h-5 bg-gray-200 mx-1" />
+      <ToolbarDivider />
 
       <ToolbarButton
         onClick={() => editor.chain().focus().toggleBold().run()}
         active={editor.isActive("bold")}
-        disabled={editingDisabled}
         title="粗体 (Ctrl+B)"
       >
         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -328,7 +341,6 @@ function Toolbar({
       <ToolbarButton
         onClick={() => editor.chain().focus().toggleItalic().run()}
         active={editor.isActive("italic")}
-        disabled={editingDisabled}
         title="斜体 (Ctrl+I)"
       >
         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -338,7 +350,6 @@ function Toolbar({
       <ToolbarButton
         onClick={() => editor.chain().focus().toggleStrike().run()}
         active={editor.isActive("strike")}
-        disabled={editingDisabled}
         title="删除线"
       >
         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -348,7 +359,6 @@ function Toolbar({
       <ToolbarButton
         onClick={() => editor.chain().focus().toggleHighlight().run()}
         active={editor.isActive("highlight")}
-        disabled={editingDisabled}
         title="高亮"
       >
         <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
@@ -356,12 +366,11 @@ function Toolbar({
         </svg>
       </ToolbarButton>
 
-      <div className="w-px h-5 bg-gray-200 mx-1" />
+      <ToolbarDivider />
 
       <ToolbarButton
         onClick={() => editor.chain().focus().toggleBulletList().run()}
         active={editor.isActive("bulletList")}
-        disabled={editingDisabled}
         title="无序列表"
       >
         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -371,7 +380,6 @@ function Toolbar({
       <ToolbarButton
         onClick={() => editor.chain().focus().toggleOrderedList().run()}
         active={editor.isActive("orderedList")}
-        disabled={editingDisabled}
         title="有序列表"
       >
         <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
@@ -381,7 +389,6 @@ function Toolbar({
       <ToolbarButton
         onClick={() => editor.chain().focus().toggleTaskList().run()}
         active={editor.isActive("taskList")}
-        disabled={editingDisabled}
         title="任务列表"
       >
         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -389,12 +396,11 @@ function Toolbar({
         </svg>
       </ToolbarButton>
 
-      <div className="w-px h-5 bg-gray-200 mx-1" />
+      <ToolbarDivider />
 
       <ToolbarButton
         onClick={() => editor.chain().focus().toggleBlockquote().run()}
         active={editor.isActive("blockquote")}
-        disabled={editingDisabled}
         title="引用"
       >
         <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
@@ -404,32 +410,27 @@ function Toolbar({
       <ToolbarButton
         onClick={() => editor.chain().focus().toggleCodeBlock().run()}
         active={editor.isActive("codeBlock")}
-        disabled={editingDisabled}
         title="代码块"
       >
         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
         </svg>
       </ToolbarButton>
-      <ToolbarButton
-        onClick={() => editor.chain().focus().setHorizontalRule().run()}
-        disabled={editingDisabled}
-        title="分割线"
-      >
+      <ToolbarButton onClick={() => editor.chain().focus().setHorizontalRule().run()} title="分割线">
         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 12h16" />
         </svg>
       </ToolbarButton>
 
-      <div className="w-px h-5 bg-gray-200 mx-1" />
+      <ToolbarDivider />
 
-      <ToolbarButton onClick={addImage} disabled={editingDisabled} title="插入图片">
+      <ToolbarButton onClick={addImage} title="插入图片">
         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
         </svg>
       </ToolbarButton>
 
-      <div className="w-px h-5 bg-gray-200 mx-1" />
+      <ToolbarDivider />
 
       <ToolbarButton onClick={importMarkdown} title="导入 Markdown">
         MD
@@ -444,39 +445,12 @@ function Toolbar({
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v10m0 0l-3-3m3 3l3-3M5 20h14" />
         </svg>
       </ToolbarButton>
-
-      <div className="w-px h-5 bg-gray-200 mx-1" />
-
-      <ToolbarButton
-        onClick={() => onViewModeChange("edit")}
-        active={viewMode === "edit"}
-        title="富文本编辑"
-      >
-        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 20h16M6 16l9.5-9.5a2.1 2.1 0 013 3L9 19H6v-3z" />
-        </svg>
-      </ToolbarButton>
-      <ToolbarButton
-        onClick={() => onViewModeChange("source")}
-        active={viewMode === "source"}
-        title="Markdown 源码"
-      >
-        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l-4 3 4 3m8-6l4 3-4 3M14 5l-4 14" />
-        </svg>
-      </ToolbarButton>
-      <ToolbarButton
-        onClick={() => onViewModeChange("preview")}
-        active={viewMode === "preview"}
-        title="预览"
-      >
-        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z" />
-          <circle cx="12" cy="12" r="3" />
-        </svg>
-      </ToolbarButton>
     </div>
   );
+}
+
+function ToolbarDivider() {
+  return <div className="w-px h-5 bg-gray-200 mx-1" />;
 }
 
 function ToolbarButton({
@@ -484,25 +458,18 @@ function ToolbarButton({
   onClick,
   active,
   title,
-  disabled,
 }: {
   children: React.ReactNode;
   onClick: () => void;
   active?: boolean;
   title?: string;
-  disabled?: boolean;
 }) {
   return (
     <button
       onClick={onClick}
       title={title}
-      disabled={disabled}
       className={`w-7 h-7 flex items-center justify-center rounded text-xs font-medium transition-colors ${
-        disabled
-          ? "cursor-not-allowed text-gray-300"
-          : active
-          ? "bg-blue-100 text-blue-700"
-          : "text-gray-600 hover:bg-gray-100 hover:text-gray-800"
+        active ? "bg-blue-100 text-blue-700" : "text-gray-600 hover:bg-gray-100 hover:text-gray-800"
       }`}
     >
       {children}
@@ -510,7 +477,6 @@ function ToolbarButton({
   );
 }
 
-// Image compression utility
 async function compressImageToDataUrl(file: File, maxWidth = 1920, quality = 0.82): Promise<string> {
   return new Promise((resolve, reject) => {
     const img = new window.Image();
@@ -545,7 +511,7 @@ async function compressImageToDataUrl(file: File, maxWidth = 1920, quality = 0.8
 
 async function migrateDataUrlImages(
   content: string,
-  saveAttachment: (dataUrl: string, filename: string) => Promise<string>
+  saveAttachment: (dataUrl: string, filename: string) => Promise<Attachment>
 ): Promise<string> {
   const doc = new DOMParser().parseFromString(`<main>${content}</main>`, "text/html");
   const images = Array.from(doc.querySelectorAll<HTMLImageElement>("img[src^='data:image/']"));
@@ -553,10 +519,43 @@ async function migrateDataUrlImages(
   for (const [index, image] of images.entries()) {
     const src = image.getAttribute("src");
     if (!src) continue;
-    const nextSrc = await saveAttachment(src, image.getAttribute("alt") || `image-${index + 1}.webp`);
-    image.setAttribute("src", nextSrc);
+    const attachment = await saveAttachment(src, image.getAttribute("alt") || `image-${index + 1}.webp`);
+    image.setAttribute("src", `attachment://${attachment.id}`);
+    image.setAttribute("data-attachment-id", attachment.id);
   }
 
+  return doc.querySelector("main")?.innerHTML ?? content;
+}
+
+function canonicalizeAttachmentReferences(content: string): string {
+  if (!content.includes("data-attachment-id")) return content;
+  const doc = new DOMParser().parseFromString(`<main>${content}</main>`, "text/html");
+  for (const image of doc.querySelectorAll<HTMLImageElement>("img[data-attachment-id]")) {
+    const id = image.dataset.attachmentId;
+    if (id) image.setAttribute("src", `attachment://${id}`);
+  }
+  return doc.querySelector("main")?.innerHTML ?? content;
+}
+
+async function hydrateAttachmentReferences(
+  content: string,
+  resolveAttachment: (id: string) => Promise<string>
+): Promise<string> {
+  if (!content.includes("attachment://")) return content;
+  const doc = new DOMParser().parseFromString(`<main>${content}</main>`, "text/html");
+  const images = Array.from(doc.querySelectorAll<HTMLImageElement>("img[src^='attachment://']"));
+  await Promise.all(
+    images.map(async (image) => {
+      const id = image.getAttribute("src")?.slice("attachment://".length);
+      if (!id) return;
+      try {
+        image.src = await resolveAttachment(id);
+        image.dataset.attachmentId = id;
+      } catch {
+        image.alt = image.alt || "附件缺失";
+      }
+    })
+  );
   return doc.querySelector("main")?.innerHTML ?? content;
 }
 
@@ -570,4 +569,89 @@ function formatSaveStatus(status: SaveStatus, errorMessage: string | null): stri
 
 function sanitizeFilename(value: string): string {
   return value.replace(/[\\/:*?"<>|]/g, "_").slice(0, 80) || "QuickNote";
+}
+
+const InlineMarkdownMarkRules = Extension.create({
+  name: "inlineMarkdownMarkRules",
+
+  addInputRules() {
+    return INLINE_MARK_RULES.flatMap(({ markName, delimiter }) => {
+      const type = this.editor.schema.marks[markName];
+      return type ? [createDelimitedMarkRule(type, delimiter)] : [];
+    });
+  },
+});
+
+const INLINE_MARK_RULES = [
+  { markName: "bold", delimiter: "**" },
+  { markName: "bold", delimiter: "__" },
+  { markName: "strike", delimiter: "~~" },
+  { markName: "highlight", delimiter: "==" },
+  { markName: "code", delimiter: "`" },
+  { markName: "italic", delimiter: "*" },
+  { markName: "italic", delimiter: "_" },
+] as const;
+
+function createDelimitedMarkRule(type: MarkType, delimiter: string) {
+  return new InputRule({
+    find: (text) => {
+      const match = findDelimitedMark(text, delimiter);
+      if (!match) return null;
+
+      return {
+        index: match.openStart,
+        text: text.slice(match.openStart),
+        data: {
+          content: match.content,
+          trailing: match.trailing,
+        },
+      };
+    },
+    handler: ({ state, range, match }) => {
+      const content = match.data?.content as string | undefined;
+      const trailing = (match.data?.trailing as string | undefined) || "";
+      if (!content) return null;
+
+      const { tr } = state;
+      const trailingLength = trailing.length;
+      const contentStart = range.from + delimiter.length;
+      const contentEnd = contentStart + content.length;
+      const closeStart = contentEnd;
+      const closeEnd = range.to - trailingLength;
+
+      tr.delete(closeStart, closeEnd);
+      tr.delete(range.from, range.from + delimiter.length);
+      tr.addMark(range.from, range.from + content.length, type.create());
+      tr.removeStoredMark(type);
+    },
+  });
+}
+
+function findDelimitedMark(text: string, delimiter: string) {
+  const trailing = text.endsWith(" ") ? " " : "";
+  const closeEnd = text.length - trailing.length;
+  const closeStart = closeEnd - delimiter.length;
+
+  if (closeStart <= delimiter.length || text.slice(closeStart, closeEnd) !== delimiter) {
+    return null;
+  }
+
+  const openStart = text.lastIndexOf(delimiter, closeStart - 1);
+  if (openStart < 0) return null;
+
+  if (delimiter.length === 1) {
+    if (text[openStart - 1] === delimiter || text[closeEnd] === delimiter) {
+      return null;
+    }
+  }
+
+  const contentStart = openStart + delimiter.length;
+  const content = text.slice(contentStart, closeStart);
+  if (!content || content.trim() !== content) return null;
+
+  return {
+    openStart,
+    content,
+    trailing,
+  };
 }

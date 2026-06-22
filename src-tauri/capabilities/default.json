@@ -5,6 +5,7 @@
   "permissions": [
     "core:default",
     "shell:allow-open",
-    "global-shortcut:default"
+    "clipboard-manager:allow-read-text",
+    "clipboard-manager:allow-write-text"
   ]
 }

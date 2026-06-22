@@ -1,8 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { List } from "react-window";
-import type { NoteSummary } from "@/types";
+import type { AppView, NoteSummary, SyncStatus } from "@/types";
 
 interface SidebarProps {
+  viewMode: AppView;
+  onViewModeChange: (mode: AppView) => void;
+  clipboardCount: number;
   notes: NoteSummary[];
   activeNoteId: string | null;
   searchQuery: string;
@@ -12,6 +15,9 @@ interface SidebarProps {
   onDeleteNote: (id: string) => void;
   onTogglePin: (id: string) => void;
   onOpenTrash: () => void;
+  syncStatus: SyncStatus;
+  onSync: () => void;
+  onOpenSettings: () => void;
 }
 
 function formatRelativeTime(dateStr: string): string {
@@ -52,6 +58,9 @@ function stripMarkdown(text: string): string {
 }
 
 export function Sidebar({
+  viewMode,
+  onViewModeChange,
+  clipboardCount,
   notes,
   activeNoteId,
   searchQuery,
@@ -61,6 +70,9 @@ export function Sidebar({
   onDeleteNote,
   onTogglePin,
   onOpenTrash,
+  syncStatus,
+  onSync,
+  onOpenSettings,
 }: SidebarProps) {
   const [contextMenu, setContextMenu] = useState<{
     noteId: string;
@@ -87,7 +99,7 @@ export function Sidebar({
       observer.disconnect();
       window.removeEventListener("resize", updateHeight);
     };
-  }, []);
+  }, [viewMode]);
 
   const handleContextMenu = useCallback(
     (e: React.MouseEvent, noteId: string) => {
@@ -202,26 +214,33 @@ export function Sidebar({
 
   return (
     <div
-      className="w-72 h-full bg-white border-r border-gray-200 flex flex-col"
+      className="hidden h-full w-72 flex-col border-r border-gray-200 bg-white md:flex"
       onClick={closeContextMenu}
     >
       {/* Header */}
       <div className="p-4 border-b border-gray-100">
         <div className="flex items-center justify-between mb-3">
           <h1 className="text-lg font-bold text-gray-800">QuickNote</h1>
-          <button
-            onClick={onCreateNote}
-            className="w-8 h-8 flex items-center justify-center rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors shadow-sm"
-            title="新建便签 (Ctrl+N)"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-            </svg>
-          </button>
+          {viewMode === "notes" && (
+            <button
+              onClick={onCreateNote}
+              className="w-8 h-8 flex items-center justify-center rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors shadow-sm"
+              title="新建便签 (Ctrl+N)"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+              </svg>
+            </button>
+          )}
+        </div>
+
+        <div className="mb-3 grid grid-cols-2 rounded-xl bg-gray-100 p-1 text-xs font-medium">
+          <button onClick={() => onViewModeChange("notes")} className={`rounded-lg px-3 py-2 transition ${viewMode === "notes" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>便签</button>
+          <button onClick={() => onViewModeChange("clipboard")} className={`rounded-lg px-3 py-2 transition ${viewMode === "clipboard" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>剪贴板</button>
         </div>
 
         {/* Search */}
-        <div className="relative">
+        {viewMode === "notes" && <div className="relative">
           <svg
             className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400"
             fill="none"
@@ -252,11 +271,11 @@ export function Sidebar({
               </svg>
             </button>
           )}
-        </div>
+        </div>}
       </div>
 
       {/* Note List (Virtual Scrolling) */}
-      <div ref={listWrapRef} className="flex-1 overflow-hidden">
+      {viewMode === "notes" ? <div ref={listWrapRef} className="flex-1 overflow-hidden">
         {notes.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-gray-400 p-6">
             <svg className="w-12 h-12 mb-3 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -283,11 +302,17 @@ export function Sidebar({
             style={{ height: Math.max(listHeight, 1), width: "100%" }}
           />
         )}
-      </div>
+      </div> : (
+        <div className="flex flex-1 flex-col items-center justify-center px-7 text-center">
+          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-violet-100 text-2xl text-violet-700">▣</div>
+          <h3 className="mt-4 text-sm font-semibold text-gray-700">跨设备剪贴板</h3>
+          <p className="mt-2 text-xs leading-5 text-gray-400">复制的文本、链接与代码片段会保存在本地，并复用 WebDAV 安全同步。</p>
+        </div>
+      )}
 
       {/* Footer */}
       <div className="px-4 py-2 border-t border-gray-100 flex items-center justify-between gap-2">
-        <button
+        {viewMode === "notes" && <button
           onClick={onOpenTrash}
           className="w-8 h-8 flex items-center justify-center rounded text-gray-500 hover:bg-gray-100 hover:text-gray-700"
           title="回收站"
@@ -295,10 +320,26 @@ export function Sidebar({
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.9 12.1A2 2 0 0116.1 21H7.9a2 2 0 01-2-1.9L5 7m5 4v6m4-6v6M4 7h16m-3 0V5a2 2 0 00-2-2h-6a2 2 0 00-2 2v2" />
           </svg>
-        </button>
+        </button>}
         <p className="text-xs text-gray-400 text-center flex-1">
-          {notes.length} 条便签
+          {viewMode === "notes" ? `${notes.length} 条便签` : `${clipboardCount} 条记录`}
         </p>
+        <button
+          onClick={onSync}
+          className={`h-8 w-8 rounded text-xs hover:bg-gray-100 ${
+            syncStatus === "error" ? "text-red-500" : "text-gray-500"
+          }`}
+          title={formatSyncStatus(syncStatus)}
+        >
+          {syncStatus === "syncing" ? "···" : "↻"}
+        </button>
+        <button
+          onClick={onOpenSettings}
+          className="h-8 w-8 rounded text-gray-500 hover:bg-gray-100"
+          title="同步设置"
+        >
+          ⚙
+        </button>
       </div>
 
       {/* Context Menu */}
@@ -336,4 +377,12 @@ export function Sidebar({
       )}
     </div>
   );
+}
+
+function formatSyncStatus(status: SyncStatus): string {
+  if (status === "disabled") return "同步未启用";
+  if (status === "syncing") return "正在同步";
+  if (status === "synced") return "同步完成";
+  if (status === "error") return "同步失败";
+  return "立即同步";
 }

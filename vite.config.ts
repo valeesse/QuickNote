@@ -27,4 +27,34 @@ export default defineConfig(async () => ({
       ignored: ["**/src-tauri/**"],
     },
   },
+  build: {
+    rolldownOptions: {
+      output: {
+        codeSplitting: {
+          groups: [
+            {
+              name: "vendor-react",
+              test: /node_modules[\\/](react|react-dom|scheduler)[\\/]/,
+              priority: 40,
+            },
+            {
+              name: "vendor-tiptap",
+              test: /node_modules[\\/](@tiptap|prosemirror-)[\\/]/,
+              priority: 30,
+            },
+            {
+              name: "vendor-lowlight",
+              test: /node_modules[\\/](lowlight|highlight\.js)[\\/]/,
+              priority: 20,
+            },
+            {
+              name: "vendor-crdt",
+              test: /node_modules[\\/](yjs|y-indexeddb|lib0)[\\/]/,
+              priority: 10,
+            },
+          ],
+        },
+      },
+    },
+  },
 }));

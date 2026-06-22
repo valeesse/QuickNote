@@ -10,8 +10,8 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = ["protocol-asset"] }
-tauri-plugin-global-shortcut = "2"
 tauri-plugin-shell = "2"
+tauri-plugin-clipboard-manager = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.31", features = ["bundled"] }
@@ -20,7 +20,20 @@ chrono = { version = "0.4", features = ["serde"] }
 thiserror = "1"
 tokio = { version = "1", features = ["full"] }
 base64 = "0.22"
+sha2 = "0.10"
+async-trait = "0.1"
+quick-xml = "0.38"
+percent-encoding = "2"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+keyring = "3"
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-global-shortcut = "2"
 
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
+
+[dev-dependencies]
+tempfile = "3"
+wiremock = "0.6"
