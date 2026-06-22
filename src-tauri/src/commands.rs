@@ -4,10 +4,11 @@ use base64::{engine::general_purpose, Engine as _};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, State};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
+#[derive(Clone)]
 pub struct AppPaths {
     pub attachments_dir: PathBuf,
 }
@@ -24,23 +25,23 @@ pub struct Attachment {
 }
 
 #[tauri::command]
-pub fn create_note(db: State<Database>, content: String) -> Result<Note, String> {
+pub fn create_note(db: State<'_, Arc<Database>>, content: String) -> Result<Note, String> {
     db.create_note(&content).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn get_note(db: State<Database>, id: String) -> Result<Option<Note>, String> {
+pub fn get_note(db: State<'_, Arc<Database>>, id: String) -> Result<Option<Note>, String> {
     db.get_note(&id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn list_notes(db: State<Database>) -> Result<Vec<NoteSummary>, String> {
+pub fn list_notes(db: State<'_, Arc<Database>>) -> Result<Vec<NoteSummary>, String> {
     db.list_notes().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn update_note(
-    db: State<Database>,
+    db: State<'_, Arc<Database>>,
     id: String,
     content: String,
 ) -> Result<Option<Note>, String> {
@@ -48,43 +49,43 @@ pub fn update_note(
 }
 
 #[tauri::command]
-pub fn delete_note(db: State<Database>, id: String) -> Result<bool, String> {
+pub fn delete_note(db: State<'_, Arc<Database>>, id: String) -> Result<bool, String> {
     db.delete_note(&id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn restore_note(db: State<Database>, id: String) -> Result<bool, String> {
+pub fn restore_note(db: State<'_, Arc<Database>>, id: String) -> Result<bool, String> {
     db.restore_note(&id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn purge_note(db: State<Database>, id: String) -> Result<bool, String> {
+pub fn purge_note(db: State<'_, Arc<Database>>, id: String) -> Result<bool, String> {
     db.purge_note(&id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn list_deleted_notes(db: State<Database>) -> Result<Vec<NoteSummary>, String> {
+pub fn list_deleted_notes(db: State<'_, Arc<Database>>) -> Result<Vec<NoteSummary>, String> {
     db.list_deleted_notes().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn toggle_pin(db: State<Database>, id: String) -> Result<bool, String> {
+pub fn toggle_pin(db: State<'_, Arc<Database>>, id: String) -> Result<bool, String> {
     db.toggle_pin(&id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn search_notes(db: State<Database>, query: String) -> Result<Vec<NoteSummary>, String> {
+pub fn search_notes(db: State<'_, Arc<Database>>, query: String) -> Result<Vec<NoteSummary>, String> {
     db.search_notes(&query).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn get_note_versions(db: State<Database>, id: String) -> Result<Vec<NoteVersion>, String> {
+pub fn get_note_versions(db: State<'_, Arc<Database>>, id: String) -> Result<Vec<NoteVersion>, String> {
     db.get_note_versions(&id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn restore_note_version(
-    db: State<Database>,
+    db: State<'_, Arc<Database>>,
     note_id: String,
     version_id: i64,
 ) -> Result<Option<Note>, String> {
@@ -93,24 +94,24 @@ pub fn restore_note_version(
 }
 
 #[tauri::command]
-pub fn toggle_version_pin(db: State<Database>, version_id: i64) -> Result<bool, String> {
+pub fn toggle_version_pin(db: State<'_, Arc<Database>>, version_id: i64) -> Result<bool, String> {
     db.toggle_version_pin(version_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn delete_note_version(db: State<Database>, version_id: i64) -> Result<bool, String> {
+pub fn delete_note_version(db: State<'_, Arc<Database>>, version_id: i64) -> Result<bool, String> {
     db.delete_note_version(version_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn clear_note_versions(db: State<Database>, note_id: String) -> Result<usize, String> {
+pub fn clear_note_versions(db: State<'_, Arc<Database>>, note_id: String) -> Result<usize, String> {
     db.clear_note_versions(&note_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn save_attachment(
-    db: State<Database>,
-    paths: State<AppPaths>,
+    db: State<'_, Arc<Database>>,
+    paths: State<'_, Arc<AppPaths>>,
     data_url: String,
     filename: String,
 ) -> Result<Attachment, String> {
@@ -148,8 +149,8 @@ pub fn save_attachment(
 
 #[tauri::command]
 pub fn get_attachment(
-    db: State<Database>,
-    paths: State<AppPaths>,
+    db: State<'_, Arc<Database>>,
+    paths: State<'_, Arc<AppPaths>>,
     id: String,
 ) -> Result<Attachment, String> {
     let record = db
@@ -167,7 +168,7 @@ pub fn get_attachment(
 }
 
 #[tauri::command]
-pub fn cleanup_attachments(db: State<Database>, paths: State<AppPaths>) -> Result<usize, String> {
+pub fn cleanup_attachments(db: State<'_, Arc<Database>>, paths: State<'_, Arc<AppPaths>>) -> Result<usize, String> {
     let orphans = db.orphan_attachments().map_err(|e| e.to_string())?;
     let mut removed = 0;
     for record in orphans {
@@ -182,13 +183,13 @@ pub fn cleanup_attachments(db: State<Database>, paths: State<AppPaths>) -> Resul
 }
 
 #[tauri::command]
-pub fn get_sync_config(sync: State<SyncService>) -> Result<SyncConfig, String> {
+pub fn get_sync_config(sync: State<'_, Arc<SyncService>>) -> Result<SyncConfig, String> {
     sync.get_config()
 }
 
 #[tauri::command]
 pub fn set_sync_config(
-    sync: State<SyncService>,
+    sync: State<'_, Arc<SyncService>>,
     config: SyncConfigInput,
 ) -> Result<SyncConfig, String> {
     sync.set_config(config)
@@ -196,9 +197,9 @@ pub fn set_sync_config(
 
 #[tauri::command]
 pub async fn sync_now(
-    db: State<'_, Database>,
-    sync: State<'_, SyncService>,
-    paths: State<'_, AppPaths>,
+    db: State<'_, Arc<Database>>,
+    sync: State<'_, Arc<SyncService>>,
+    paths: State<'_, Arc<AppPaths>>,
 ) -> Result<SyncReport, String> {
     sync.sync(&db, &paths.attachments_dir).await
 }
@@ -211,8 +212,8 @@ pub fn clipboard_auto_capture_supported() -> bool {
 #[tauri::command]
 pub fn capture_clipboard(
     app: AppHandle,
-    db: State<Database>,
-    sync: State<SyncService>,
+    db: State<'_, Arc<Database>>,
+    sync: State<'_, Arc<SyncService>>,
     capture_state: State<ClipboardCaptureState>,
 ) -> Result<Option<ClipboardItem>, String> {
     let content = app.clipboard().read_text().map_err(|e| e.to_string())?;
@@ -243,7 +244,7 @@ pub fn capture_clipboard(
 
 #[tauri::command]
 pub fn list_clipboard_items(
-    db: State<Database>,
+    db: State<'_, Arc<Database>>,
     query: String,
 ) -> Result<Vec<ClipboardItem>, String> {
     db.list_clipboard_items(&query, 300)
@@ -253,7 +254,7 @@ pub fn list_clipboard_items(
 #[tauri::command]
 pub fn copy_clipboard_item(
     app: AppHandle,
-    db: State<Database>,
+    db: State<'_, Arc<Database>>,
     capture_state: State<ClipboardCaptureState>,
     id: String,
 ) -> Result<bool, String> {
@@ -273,12 +274,12 @@ pub fn copy_clipboard_item(
 }
 
 #[tauri::command]
-pub fn toggle_clipboard_pin(db: State<Database>, id: String) -> Result<bool, String> {
+pub fn toggle_clipboard_pin(db: State<'_, Arc<Database>>, id: String) -> Result<bool, String> {
     db.toggle_clipboard_pin(&id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn delete_clipboard_item(db: State<Database>, id: String) -> Result<bool, String> {
+pub fn delete_clipboard_item(db: State<'_, Arc<Database>>, id: String) -> Result<bool, String> {
     db.delete_clipboard_item(&id).map_err(|e| e.to_string())
 }
 

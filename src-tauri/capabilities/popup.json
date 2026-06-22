@@ -1,0 +1,10 @@
+{
+  "identifier": "popup",
+  "description": "Capability for popup windows (clipboard and quick note)",
+  "windows": ["clipboard-popup", "quick-note"],
+  "permissions": [
+    "core:default",
+    "clipboard-manager:allow-read-text",
+    "clipboard-manager:allow-write-text"
+  ]
+}
