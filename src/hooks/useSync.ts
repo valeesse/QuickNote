@@ -33,7 +33,7 @@ export function useSync({
       const next = await invoke<SyncConfig>("get_sync_config");
       configRef.current = next;
       setConfig(next);
-      setStatus(next.enabled ? "idle" : "disabled");
+      setStatus(next.enabled || next.cloud_enabled ? "idle" : "disabled");
       return next;
     } catch (err) {
       setError(getErrorMessage(err));
@@ -43,7 +43,8 @@ export function useSync({
   }, []);
 
   const syncNow = useCallback(async () => {
-    if (!configRef.current?.enabled || syncingRef.current) {
+    const cfg = configRef.current;
+    if ((!cfg?.enabled && !cfg?.cloud_enabled) || syncingRef.current) {
       return syncingRef.current ?? false;
     }
 
@@ -76,7 +77,7 @@ export function useSync({
     const next = await invoke<SyncConfig>("set_sync_config", { config: input });
     configRef.current = next;
     setConfig(next);
-    setStatus(next.enabled ? "idle" : "disabled");
+    setStatus(next.enabled || next.cloud_enabled ? "idle" : "disabled");
     setError(null);
     return next;
   }, []);

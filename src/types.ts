@@ -41,6 +41,10 @@ export interface SyncConfig {
   endpoint: string;
   username: string;
   device_id: string;
+  cloud_enabled: boolean;
+  cloud_url: string;
+  cloud_email: string;
+  cloud_cursor_seq: number;
 }
 
 export interface SyncConfigInput {
@@ -49,6 +53,10 @@ export interface SyncConfigInput {
   endpoint: string;
   username: string;
   password?: string;
+  cloud_enabled: boolean;
+  cloud_url: string;
+  cloud_email: string;
+  cloud_password?: string;
 }
 
 export interface SyncReport {

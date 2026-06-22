@@ -1,0 +1,75 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: quicknote
+      POSTGRES_USER: quicknote
+      POSTGRES_PASSWORD: quicknote_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U quicknote"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  seaweedfs-master:
+    image: chrislusf/seaweedfs
+    command: "master -ip=seaweedfs-master -port=9333 -defaultReplication=000"
+    ports:
+      - "9333:9333"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9333/cluster/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  seaweedfs-volume:
+    image: chrislusf/seaweedfs
+    command: "volume -mserver=seaweedfs-master:9333 -port=8080 -ip=seaweedfs-volume"
+    ports:
+      - "8080:8080"
+    depends_on:
+      seaweedfs-master:
+        condition: service_healthy
+    volumes:
+      - weedvol:/data
+
+  seaweedfs-filer:
+    image: chrislusf/seaweedfs
+    command: "filer -master=seaweedfs-master:9333 -port=8888"
+    ports:
+      - "8888:8888"
+    depends_on:
+      seaweedfs-volume:
+        condition: service_started
+
+  api:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgres://quicknote:quicknote_dev@postgres:5432/quicknote
+      JWT_SECRET: dev-secret-change-in-production
+      SEAWEEDFS_FILER: http://seaweedfs-filer:8888
+      RUST_LOG: info
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    ports:
+      - "8081:80"
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
+  weedvol:

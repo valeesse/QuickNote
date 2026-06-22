@@ -232,6 +232,10 @@ function SyncSettingsPanel({
   const [endpoint, setEndpoint] = useState(config?.endpoint ?? "");
   const [username, setUsername] = useState(config?.username ?? "");
   const [password, setPassword] = useState("");
+  const [cloudEnabled, setCloudEnabled] = useState(config?.cloud_enabled ?? false);
+  const [cloudUrl, setCloudUrl] = useState(config?.cloud_url ?? "");
+  const [cloudEmail, setCloudEmail] = useState(config?.cloud_email ?? "");
+  const [cloudPassword, setCloudPassword] = useState("");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -239,6 +243,9 @@ function SyncSettingsPanel({
     setEnabled(config.enabled);
     setEndpoint(config.endpoint);
     setUsername(config.username);
+    setCloudEnabled(config.cloud_enabled ?? false);
+    setCloudUrl(config.cloud_url ?? "");
+    setCloudEmail(config.cloud_email ?? "");
   }, [config]);
 
   const save = async () => {
@@ -250,8 +257,13 @@ function SyncSettingsPanel({
         endpoint,
         username,
         password: password || undefined,
+        cloud_enabled: cloudEnabled,
+        cloud_url: cloudUrl,
+        cloud_email: cloudEmail,
+        cloud_password: cloudPassword || undefined,
       });
       setPassword("");
+      setCloudPassword("");
     } finally {
       setSaving(false);
     }
@@ -260,16 +272,21 @@ function SyncSettingsPanel({
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-black/20" onMouseDown={onClose}>
       <div
-        className="h-full w-full max-w-sm border-l border-gray-200 bg-white shadow-xl"
+        className="h-full w-full max-w-sm border-l border-gray-200 bg-white shadow-xl overflow-y-auto"
         onMouseDown={(event) => event.stopPropagation()}
       >
-        <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
+        <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4 sticky top-0 bg-white z-10">
           <h2 className="text-sm font-semibold text-gray-800">数据同步</h2>
           <button onClick={onClose} className="h-7 w-7 rounded hover:bg-gray-100 flex items-center justify-center" title="关闭">
             <X className="h-4 w-4 text-gray-500" />
           </button>
         </div>
+
+        {/* WebDAV Section */}
         <div className="space-y-5 p-5">
+          <div className="flex items-center gap-2 border-b border-gray-100 pb-2">
+            <span className="text-xs font-medium text-gray-400 uppercase tracking-wider">WebDAV</span>
+          </div>
           <label className="flex items-center justify-between text-sm text-gray-700">
             <span>启用 WebDAV 同步</span>
             <input
@@ -306,8 +323,56 @@ function SyncSettingsPanel({
               className="w-full rounded border border-gray-200 px-3 py-2 outline-none focus:border-blue-500"
             />
           </label>
-          {error && <p className="rounded bg-red-50 px-3 py-2 text-xs text-red-700">{error}</p>}
-          <div className="flex items-center gap-2 border-t border-gray-100 pt-4">
+        </div>
+
+        {/* Cloud Sync Section */}
+        <div className="space-y-5 border-t border-gray-200 p-5">
+          <div className="flex items-center gap-2 border-b border-gray-100 pb-2">
+            <span className="text-xs font-medium text-gray-400 uppercase tracking-wider">云同步</span>
+          </div>
+          <label className="flex items-center justify-between text-sm text-gray-700">
+            <span>启用云同步</span>
+            <input
+              type="checkbox"
+              checked={cloudEnabled}
+              onChange={(event) => setCloudEnabled(event.target.checked)}
+              className="h-4 w-4 accent-violet-600"
+            />
+          </label>
+          <label className="block text-sm text-gray-600">
+            <span className="mb-1.5 block">云服务地址</span>
+            <input
+              value={cloudUrl}
+              onChange={(event) => setCloudUrl(event.target.value)}
+              placeholder="https://cloud.quicknote.app"
+              className="w-full rounded border border-gray-200 px-3 py-2 outline-none focus:border-violet-500"
+            />
+          </label>
+          <label className="block text-sm text-gray-600">
+            <span className="mb-1.5 block">邮箱</span>
+            <input
+              value={cloudEmail}
+              onChange={(event) => setCloudEmail(event.target.value)}
+              placeholder="user@example.com"
+              className="w-full rounded border border-gray-200 px-3 py-2 outline-none focus:border-violet-500"
+            />
+          </label>
+          <label className="block text-sm text-gray-600">
+            <span className="mb-1.5 block">密码</span>
+            <input
+              type="password"
+              value={cloudPassword}
+              onChange={(event) => setCloudPassword(event.target.value)}
+              placeholder={cloudEnabled ? "留空则保持不变" : "云服务密码"}
+              className="w-full rounded border border-gray-200 px-3 py-2 outline-none focus:border-violet-500"
+            />
+          </label>
+        </div>
+
+        {/* Actions */}
+        <div className="p-5 border-t border-gray-200 sticky bottom-0 bg-white">
+          {error && <p className="mb-3 rounded bg-red-50 px-3 py-2 text-xs text-red-700">{error}</p>}
+          <div className="flex items-center gap-2">
             <button
               onClick={() => void save()}
               disabled={saving}
@@ -317,7 +382,7 @@ function SyncSettingsPanel({
             </button>
             <button
               onClick={() => void onSync()}
-              disabled={!config?.enabled || status === "syncing"}
+              disabled={status === "syncing"}
               className="rounded px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-40"
             >
               {status === "syncing" ? "同步中" : "立即同步"}

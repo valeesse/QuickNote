@@ -1,3 +1,4 @@
+mod cloud;
 mod webdav;
 
 use crate::db::{AttachmentRecord, CausalVersion, ClipboardItem, Database, Note, SyncChange};
@@ -19,6 +20,14 @@ pub struct SyncConfig {
     pub endpoint: String,
     pub username: String,
     pub device_id: String,
+    #[serde(default)]
+    pub cloud_enabled: bool,
+    #[serde(default)]
+    pub cloud_url: String,
+    #[serde(default)]
+    pub cloud_email: String,
+    #[serde(default)]
+    pub cloud_cursor_seq: i64,
 }
 
 impl Default for SyncConfig {
@@ -29,6 +38,10 @@ impl Default for SyncConfig {
             endpoint: String::new(),
             username: String::new(),
             device_id: Uuid::new_v4().to_string(),
+            cloud_enabled: false,
+            cloud_url: String::new(),
+            cloud_email: String::new(),
+            cloud_cursor_seq: 0,
         }
     }
 }
@@ -40,6 +53,13 @@ pub struct SyncConfigInput {
     pub endpoint: String,
     pub username: String,
     pub password: Option<String>,
+    #[serde(default)]
+    pub cloud_enabled: bool,
+    #[serde(default)]
+    pub cloud_url: String,
+    #[serde(default)]
+    pub cloud_email: String,
+    pub cloud_password: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -50,7 +70,7 @@ pub struct SyncReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct SyncEnvelope {
+pub struct SyncEnvelope {
     schema_version: u32,
     device_id: String,
     seq: i64,
@@ -101,7 +121,7 @@ impl SyncService {
     }
 
     pub fn set_config(&self, input: SyncConfigInput) -> Result<SyncConfig, String> {
-        if input.provider != PROVIDER_NAME {
+        if input.provider != PROVIDER_NAME && !input.provider.is_empty() {
             return Err(format!("Unsupported sync provider: {}", input.provider));
         }
         if input.enabled
@@ -117,11 +137,23 @@ impl SyncService {
             endpoint: input.endpoint.trim_end_matches('/').to_string(),
             username: input.username.trim().to_string(),
             device_id: existing.device_id,
+            cloud_enabled: input.cloud_enabled,
+            cloud_url: input.cloud_url.trim_end_matches('/').to_string(),
+            cloud_email: input.cloud_email.trim().to_string(),
+            cloud_cursor_seq: existing.cloud_cursor_seq,
         };
         if let Some(password) = input.password.filter(|value| !value.is_empty()) {
             keyring_entry(&config)?
                 .set_password(&password)
                 .map_err(|e| e.to_string())?;
+        }
+        // Store cloud password in keyring if provided
+        if let Some(cloud_pw) = input.cloud_password.filter(|v| !v.is_empty()) {
+            if !config.cloud_url.is_empty() && !config.cloud_email.is_empty() {
+                cloud_keyring_entry(&config)?
+                    .set_password(&cloud_pw)
+                    .map_err(|e| format!("Failed to store cloud credentials: {e}"))?;
+            }
         }
         let data = serde_json::to_vec_pretty(&config).map_err(|e| e.to_string())?;
         std::fs::write(&self.config_path, data)
@@ -131,11 +163,91 @@ impl SyncService {
 
     pub async fn sync(&self, db: &Database, attachments_dir: &Path) -> Result<SyncReport, String> {
         let _guard = self.sync_lock.lock().await;
-        let config = self.get_config()?;
-        if !config.enabled {
+        let mut config = self.get_config()?;
+
+        let mut total_pushed = 0;
+        let mut total_pulled = 0;
+        let mut total_conflicts = 0;
+
+        // Cloud sync path
+        if config.cloud_enabled && !config.cloud_url.is_empty() {
+            let cloud_token = self.get_cloud_token(&config)?;
+            let cloud = cloud::CloudProvider::new(&config.cloud_url, &cloud_token);
+
+            // Pull from cloud
+            let (envelopes, server_seq) = cloud.pull(config.cloud_cursor_seq).await?;
+            for envelope in &envelopes {
+                let (changed, conflict) = apply_envelope(
+                    &NullProvider,
+                    db,
+                    attachments_dir,
+                    envelope,
+                    &config.device_id,
+                )
+                .await?;
+                if changed {
+                    total_pulled += 1;
+                }
+                if conflict {
+                    total_conflicts += 1;
+                }
+            }
+            config.cloud_cursor_seq = server_seq;
+
+            // Push local changes to cloud
+            let changes = db.list_pending_changes(500).map_err(|e| e.to_string())?;
+            let mut cloud_envelopes = Vec::new();
+            for change in &changes {
+                if let Ok(envelope) = build_envelope(db, change, &config.device_id) {
+                    cloud_envelopes.push(envelope);
+                }
+            }
+            if !cloud_envelopes.is_empty() {
+                let (accepted, conflicts) = cloud.push(&cloud_envelopes).await?;
+                total_pushed += accepted;
+                total_conflicts += conflicts;
+                // Mark synced changes
+                for change in changes.iter().take(accepted) {
+                    db.mark_change_synced(change.seq)
+                        .map_err(|e| e.to_string())?;
+                }
+            }
+
+            // If WebDAV also enabled, push to WebDAV as backup
+            if config.enabled {
+                if let Ok((wp, wr)) = self.webdav_sync(db, attachments_dir, &config).await {
+                    total_pushed += wp;
+                    total_pulled += wr.0;
+                    total_conflicts += wr.1;
+                }
+            }
+
+            // Save updated cursor
+            self.save_config(&config)?;
+        } else if config.enabled {
+            // WebDAV-only sync (existing logic)
+            let (wp, (pulled, conflicts)) = self.webdav_sync(db, attachments_dir, &config).await?;
+            total_pushed = wp;
+            total_pulled = pulled;
+            total_conflicts = conflicts;
+        } else {
             return Err("Sync is not enabled".to_string());
         }
-        let password = keyring_entry(&config)?
+
+        Ok(SyncReport {
+            pushed: total_pushed,
+            pulled: total_pulled,
+            conflicts: total_conflicts,
+        })
+    }
+
+    async fn webdav_sync(
+        &self,
+        db: &Database,
+        attachments_dir: &Path,
+        config: &SyncConfig,
+    ) -> Result<(usize, (usize, usize)), String> {
+        let password = keyring_entry(config)?
             .get_password()
             .map_err(|_| "WebDAV password is missing; save sync settings again".to_string())?;
         let provider = WebDavProvider::new(&config.endpoint, &config.username, &password)?;
@@ -143,18 +255,44 @@ impl SyncService {
         db.ensure_sync_bootstrap(&format!("{}:{}", config.provider, config.endpoint))
             .map_err(|e| e.to_string())?;
 
-        let (pulled, conflicts) = pull_changes(&provider, db, attachments_dir, &config).await?;
-        let pushed = push_changes(&provider, db, attachments_dir, &config).await?;
-        Ok(SyncReport {
-            pushed,
-            pulled,
-            conflicts,
-        })
+        let pulled_conflicts = pull_changes(&provider, db, attachments_dir, config).await?;
+        let pushed = push_changes(&provider, db, attachments_dir, config).await?;
+        Ok((pushed, pulled_conflicts))
+    }
+
+    fn get_cloud_token(&self, config: &SyncConfig) -> Result<String, String> {
+        // Try to get cached token from keyring, or login
+        cloud_keyring_entry(config)?
+            .get_password()
+            .map_err(|_| "Cloud credentials missing. Please login in sync settings.".to_string())
+    }
+
+    fn save_config(&self, config: &SyncConfig) -> Result<(), String> {
+        let data = serde_json::to_vec_pretty(config).map_err(|e| e.to_string())?;
+        std::fs::write(&self.config_path, data)
+            .map_err(|e| format!("Failed to save sync config: {e}"))?;
+        Ok(())
     }
 }
 
 fn keyring_entry(config: &SyncConfig) -> Result<keyring::Entry, String> {
     keyring::Entry::new("com.quicknote.desktop.sync", &config.device_id).map_err(|e| e.to_string())
+}
+
+fn cloud_keyring_entry(config: &SyncConfig) -> Result<keyring::Entry, String> {
+    keyring::Entry::new("com.quicknote.desktop.cloud", &config.cloud_email)
+        .map_err(|e| e.to_string())
+}
+
+/// Null provider for cloud sync (no file-based storage needed)
+struct NullProvider;
+
+#[async_trait]
+impl SyncProvider for NullProvider {
+    async fn prepare(&self, _device_id: &str) -> Result<(), String> { Ok(()) }
+    async fn list(&self, _path: &str) -> Result<Vec<String>, String> { Ok(vec![]) }
+    async fn get(&self, _path: &str) -> Result<Option<Vec<u8>>, String> { Ok(None) }
+    async fn put(&self, _path: &str, _body: Vec<u8>, _content_type: &str) -> Result<(), String> { Ok(()) }
 }
 
 async fn push_changes(
@@ -515,6 +653,10 @@ mod tests {
             endpoint: "https://dav.test/quicknote".to_string(),
             username: "tester".to_string(),
             device_id: device_id.to_string(),
+            cloud_enabled: false,
+            cloud_url: String::new(),
+            cloud_email: String::new(),
+            cloud_cursor_seq: 0,
         }
     }
 
