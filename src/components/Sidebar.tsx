@@ -1,5 +1,17 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { List } from "react-window";
+import {
+  Plus,
+  Search,
+  X,
+  Trash2,
+  RefreshCw,
+  Settings,
+  Star,
+  Bookmark,
+  FileText,
+  Clipboard,
+} from "lucide-react";
 import type { AppView, NoteSummary, SyncStatus } from "@/types";
 
 interface SidebarProps {
@@ -151,9 +163,7 @@ export function Sidebar({
     if (showPinnedHeader) {
       return (
         <div style={style} className="flex items-center px-4 pt-3 pb-1">
-          <svg className="w-3 h-3 text-gray-400 mr-1.5" fill="currentColor" viewBox="0 0 20 20">
-            <path d="M10 2L13.09 8.26L20 9.27L15 14.14L16.18 21.02L10 17.77L3.82 21.02L5 14.14L0 9.27L6.91 8.26L10 2Z" />
-          </svg>
+          <Star className="w-3 h-3 text-gray-400 mr-1.5" fill="currentColor" />
           <span className="text-xs font-medium text-gray-400 uppercase tracking-wider">
             已置顶
           </span>
@@ -191,9 +201,7 @@ export function Sidebar({
               {note.title || "无标题"}
             </h3>
             {note.is_pinned && (
-              <svg className="w-3.5 h-3.5 text-blue-500 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
-                <path d="M10 2L13.09 8.26L20 9.27L15 14.14L16.18 21.02L10 17.77L3.82 21.02L5 14.14L0 9.27L6.91 8.26L10 2Z" />
-              </svg>
+              <Star className="w-3.5 h-3.5 text-blue-500 flex-shrink-0" fill="currentColor" />
             )}
           </div>
           <p className="mt-1 min-h-0 flex-1 overflow-hidden text-xs leading-relaxed text-gray-500">
@@ -227,9 +235,7 @@ export function Sidebar({
               className="w-8 h-8 flex items-center justify-center rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors shadow-sm"
               title="新建便签 (Ctrl+N)"
             >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-              </svg>
+              <Plus className="w-4 h-4" />
             </button>
           )}
         </div>
@@ -241,19 +247,7 @@ export function Sidebar({
 
         {/* Search */}
         {viewMode === "notes" && <div className="relative">
-          <svg
-            className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-            />
-          </svg>
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
           <input
             type="text"
             placeholder="搜索便签..."
@@ -266,9 +260,7 @@ export function Sidebar({
               onClick={() => onSearchChange("")}
               className="absolute right-2 top-1/2 -translate-y-1/2 w-5 h-5 flex items-center justify-center rounded-full text-gray-400 hover:text-gray-600 hover:bg-gray-200"
             >
-              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
+              <X className="w-3 h-3" />
             </button>
           )}
         </div>}
@@ -278,9 +270,7 @@ export function Sidebar({
       {viewMode === "notes" ? <div ref={listWrapRef} className="flex-1 overflow-hidden">
         {notes.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-gray-400 p-6">
-            <svg className="w-12 h-12 mb-3 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-            </svg>
+            <FileText className="w-12 h-12 mb-3 opacity-50" />
             <p className="text-sm text-center">
               {searchQuery ? "没有找到匹配的便签" : "还没有便签"}
             </p>
@@ -304,7 +294,9 @@ export function Sidebar({
         )}
       </div> : (
         <div className="flex flex-1 flex-col items-center justify-center px-7 text-center">
-          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-violet-100 text-2xl text-violet-700">▣</div>
+          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-violet-100 text-violet-700">
+            <Clipboard className="h-7 w-7" />
+          </div>
           <h3 className="mt-4 text-sm font-semibold text-gray-700">跨设备剪贴板</h3>
           <p className="mt-2 text-xs leading-5 text-gray-400">复制的文本、链接与代码片段会保存在本地，并复用 WebDAV 安全同步。</p>
         </div>
@@ -317,28 +309,26 @@ export function Sidebar({
           className="w-8 h-8 flex items-center justify-center rounded text-gray-500 hover:bg-gray-100 hover:text-gray-700"
           title="回收站"
         >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.9 12.1A2 2 0 0116.1 21H7.9a2 2 0 01-2-1.9L5 7m5 4v6m4-6v6M4 7h16m-3 0V5a2 2 0 00-2-2h-6a2 2 0 00-2 2v2" />
-          </svg>
+          <Trash2 className="w-4 h-4" />
         </button>}
         <p className="text-xs text-gray-400 text-center flex-1">
           {viewMode === "notes" ? `${notes.length} 条便签` : `${clipboardCount} 条记录`}
         </p>
         <button
           onClick={onSync}
-          className={`h-8 w-8 rounded text-xs hover:bg-gray-100 ${
+          className={`h-8 w-8 rounded text-xs hover:bg-gray-100 flex items-center justify-center ${
             syncStatus === "error" ? "text-red-500" : "text-gray-500"
           }`}
           title={formatSyncStatus(syncStatus)}
         >
-          {syncStatus === "syncing" ? "···" : "↻"}
+          <RefreshCw className={`w-4 h-4 ${syncStatus === "syncing" ? "animate-spin" : ""}`} />
         </button>
         <button
           onClick={onOpenSettings}
-          className="h-8 w-8 rounded text-gray-500 hover:bg-gray-100"
+          className="h-8 w-8 rounded text-gray-500 hover:bg-gray-100 flex items-center justify-center"
           title="同步设置"
         >
-          ⚙
+          <Settings className="w-4 h-4" />
         </button>
       </div>
 
@@ -355,9 +345,7 @@ export function Sidebar({
             }}
             className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50 flex items-center gap-2"
           >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
-            </svg>
+            <Bookmark className="w-4 h-4" />
             置顶 / 取消置顶
           </button>
           <hr className="my-1 border-gray-100" />
@@ -368,9 +356,7 @@ export function Sidebar({
             }}
             className="w-full px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
           >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-            </svg>
+            <Trash2 className="w-4 h-4" />
             删除
           </button>
         </div>

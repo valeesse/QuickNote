@@ -98,6 +98,16 @@ pub fn toggle_version_pin(db: State<Database>, version_id: i64) -> Result<bool, 
 }
 
 #[tauri::command]
+pub fn delete_note_version(db: State<Database>, version_id: i64) -> Result<bool, String> {
+    db.delete_note_version(version_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn clear_note_versions(db: State<Database>, note_id: String) -> Result<usize, String> {
+    db.clear_note_versions(&note_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn save_attachment(
     db: State<Database>,
     paths: State<AppPaths>,

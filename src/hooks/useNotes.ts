@@ -430,6 +430,32 @@ export function useNotes() {
     [loadVersions]
   );
 
+  const deleteVersion = useCallback(
+    async (noteId: string, versionId: number) => {
+      try {
+        await invoke("delete_note_version", { versionId });
+        await loadVersions(noteId);
+      } catch (err) {
+        console.error("Failed to delete version:", err);
+        setErrorMessage(getErrorMessage(err));
+      }
+    },
+    [loadVersions]
+  );
+
+  const clearVersions = useCallback(
+    async (noteId: string) => {
+      try {
+        await invoke("clear_note_versions", { noteId });
+        await loadVersions(noteId);
+      } catch (err) {
+        console.error("Failed to clear versions:", err);
+        setErrorMessage(getErrorMessage(err));
+      }
+    },
+    [loadVersions]
+  );
+
   const saveAttachment = useCallback(async (dataUrl: string, filename: string) => {
     const attachment = await invoke<Attachment>("save_attachment", { dataUrl, filename });
     return { ...attachment, path: convertFileSrc(attachment.path) };
@@ -503,6 +529,8 @@ export function useNotes() {
     loadVersions,
     restoreVersion,
     toggleVersionPin,
+    deleteVersion,
+    clearVersions,
     saveAttachment,
     resolveAttachment,
     flushAllDrafts,

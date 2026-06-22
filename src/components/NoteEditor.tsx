@@ -10,6 +10,22 @@ import TaskItem from "@tiptap/extension-task-item";
 import Highlight from "@tiptap/extension-highlight";
 import Typography from "@tiptap/extension-typography";
 import { Markdown } from "@tiptap/markdown";
+import {
+  Bold,
+  Italic,
+  Strikethrough,
+  Highlighter,
+  List,
+  ListOrdered,
+  ListChecks,
+  Quote,
+  Code,
+  Minus,
+  ImagePlus,
+  FileDown,
+  FileUp,
+  Copy,
+} from "lucide-react";
 import type { Attachment, Note, SaveStatus } from "@/types";
 
 const AttachmentImage = Image.extend({
@@ -334,36 +350,28 @@ function Toolbar({
         active={editor.isActive("bold")}
         title="粗体 (Ctrl+B)"
       >
-        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 4h8a4 4 0 014 4 4 4 0 01-4 4H6z M6 12h9a4 4 0 014 4 4 4 0 01-4 4H6z" />
-        </svg>
+        <Bold className="w-4 h-4" />
       </ToolbarButton>
       <ToolbarButton
         onClick={() => editor.chain().focus().toggleItalic().run()}
         active={editor.isActive("italic")}
         title="斜体 (Ctrl+I)"
       >
-        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 4h4m-2 0l-4 16m-2 0h4" />
-        </svg>
+        <Italic className="w-4 h-4" />
       </ToolbarButton>
       <ToolbarButton
         onClick={() => editor.chain().focus().toggleStrike().run()}
         active={editor.isActive("strike")}
         title="删除线"
       >
-        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 12h12M8 6h8a2 2 0 010 4H8m0 8h8a2 2 0 000-4" />
-        </svg>
+        <Strikethrough className="w-4 h-4" />
       </ToolbarButton>
       <ToolbarButton
         onClick={() => editor.chain().focus().toggleHighlight().run()}
         active={editor.isActive("highlight")}
         title="高亮"
       >
-        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-          <path d="M15.24 2.79a1 1 0 00-1.41.17L4.6 15.36a1 1 0 00-.17.42L3.8 19.5a.5.5 0 00.6.6l3.72-.63a1 1 0 00.42-.17L19.37 8.93a1 1 0 00.17-1.41l-4.22-4.73z" />
-        </svg>
+        <Highlighter className="w-4 h-4" />
       </ToolbarButton>
 
       <ToolbarDivider />
@@ -373,27 +381,21 @@ function Toolbar({
         active={editor.isActive("bulletList")}
         title="无序列表"
       >
-        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-        </svg>
+        <List className="w-4 h-4" />
       </ToolbarButton>
       <ToolbarButton
         onClick={() => editor.chain().focus().toggleOrderedList().run()}
         active={editor.isActive("orderedList")}
         title="有序列表"
       >
-        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h10M7 16h10M3 7v2M3 11v2M3 15v2" />
-        </svg>
+        <ListOrdered className="w-4 h-4" />
       </ToolbarButton>
       <ToolbarButton
         onClick={() => editor.chain().focus().toggleTaskList().run()}
         active={editor.isActive("taskList")}
         title="任务列表"
       >
-        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
-        </svg>
+        <ListChecks className="w-4 h-4" />
       </ToolbarButton>
 
       <ToolbarDivider />
@@ -403,47 +405,35 @@ function Toolbar({
         active={editor.isActive("blockquote")}
         title="引用"
       >
-        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-          <path d="M4.583 17.321C3.553 16.227 3 15 3 13.011c0-3.5 2.457-6.637 6.03-8.188l.893 1.378c-3.335 1.804-3.987 4.145-4.247 5.621.537-.278 1.24-.375 1.929-.311 1.804.167 3.226 1.648 3.226 3.489a3.5 3.5 0 01-3.5 3.5c-1.073 0-2.099-.49-2.748-1.179zm10 0C13.553 16.227 13 15 13 13.011c0-3.5 2.457-6.637 6.03-8.188l.893 1.378c-3.335 1.804-3.987 4.145-4.247 5.621.537-.278 1.24-.375 1.929-.311 1.804.167 3.226 1.648 3.226 3.489a3.5 3.5 0 01-3.5 3.5c-1.073 0-2.099-.49-2.748-1.179z" />
-        </svg>
+        <Quote className="w-4 h-4" />
       </ToolbarButton>
       <ToolbarButton
         onClick={() => editor.chain().focus().toggleCodeBlock().run()}
         active={editor.isActive("codeBlock")}
         title="代码块"
       >
-        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
-        </svg>
+        <Code className="w-4 h-4" />
       </ToolbarButton>
       <ToolbarButton onClick={() => editor.chain().focus().setHorizontalRule().run()} title="分割线">
-        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 12h16" />
-        </svg>
+        <Minus className="w-4 h-4" />
       </ToolbarButton>
 
       <ToolbarDivider />
 
       <ToolbarButton onClick={addImage} title="插入图片">
-        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-        </svg>
+        <ImagePlus className="w-4 h-4" />
       </ToolbarButton>
 
       <ToolbarDivider />
 
       <ToolbarButton onClick={importMarkdown} title="导入 Markdown">
-        MD
+        <FileUp className="w-4 h-4" />
       </ToolbarButton>
       <ToolbarButton onClick={copyMarkdown} title="复制为 Markdown">
-        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16h8M8 12h8m-7 8h6a2 2 0 002-2V7.5L13.5 4H9a2 2 0 00-2 2v12a2 2 0 002 2z" />
-        </svg>
+        <Copy className="w-4 h-4" />
       </ToolbarButton>
       <ToolbarButton onClick={exportMarkdown} title="导出 Markdown">
-        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v10m0 0l-3-3m3 3l3-3M5 20h14" />
-        </svg>
+        <FileDown className="w-4 h-4" />
       </ToolbarButton>
     </div>
   );

@@ -1,3 +1,4 @@
+import { Search, Pin, PinOff, X, Copy, Clipboard } from "lucide-react";
 import type { ClipboardItem } from "@/types";
 
 interface ClipboardPanelProps {
@@ -57,7 +58,7 @@ export function ClipboardPanel({
         </div>
         <div className="mx-auto mt-4 max-w-6xl">
           <div className="relative max-w-xl">
-            <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-gray-400">⌕</span>
+            <Search className="pointer-events-none absolute inset-y-0 left-3 my-auto h-4 w-4 text-gray-400" />
             <input
               value={query}
               onChange={(event) => onQueryChange(event.target.value)}
@@ -73,7 +74,9 @@ export function ClipboardPanel({
         <div className="mx-auto max-w-6xl">
           {items.length === 0 ? (
             <div className="flex min-h-72 flex-col items-center justify-center rounded-3xl border border-dashed border-gray-300 bg-white text-center">
-              <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-violet-100 text-2xl">▣</div>
+              <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-violet-100 text-violet-700">
+                <Clipboard className="h-7 w-7" />
+              </div>
               <h3 className="text-sm font-semibold text-gray-700">暂无剪贴板记录</h3>
               <p className="mt-1 max-w-sm text-xs leading-5 text-gray-400">复制文本、链接或代码片段后，它们会安全地进入本地历史，并通过已配置的 WebDAV 同步。</p>
             </div>
@@ -118,22 +121,28 @@ function ClipboardCard({
   const label = item.kind === "link" ? "链接" : item.kind === "code" ? "代码" : "文本";
 
   return (
-    <article className="group flex min-h-48 flex-col rounded-2xl border border-gray-200/80 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
-      <div className="flex items-center justify-between gap-3">
-        <span className={`rounded-lg px-2.5 py-1 text-xs font-medium ${palette}`}>{label}</span>
-        <div className="flex items-center gap-1 opacity-70 transition group-hover:opacity-100">
-          <button onClick={onTogglePin} className={`rounded-lg px-2 py-1 text-sm hover:bg-gray-100 ${item.is_pinned ? "text-amber-500" : "text-gray-400"}`} title={item.is_pinned ? "取消固定" : "固定"}>⌖</button>
-          <button onClick={onDelete} className="rounded-lg px-2 py-1 text-sm text-gray-400 hover:bg-red-50 hover:text-red-500" title="删除">×</button>
+    <article className="group flex min-h-36 flex-col rounded-xl border border-gray-200/80 bg-white p-3 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
+      <div className="flex items-center justify-between gap-2">
+        <span className={`rounded-md px-2 py-0.5 text-[11px] font-medium ${palette}`}>{label}</span>
+        <div className="flex items-center gap-0.5 opacity-60 transition group-hover:opacity-100">
+          <button onClick={onTogglePin} className={`rounded p-1 hover:bg-gray-100 ${item.is_pinned ? "text-amber-500" : "text-gray-400"}`} title={item.is_pinned ? "取消固定" : "固定"}>
+            {item.is_pinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
+          </button>
+          <button onClick={onDelete} className="rounded p-1 text-gray-400 hover:bg-red-50 hover:text-red-500" title="删除">
+            <X className="h-3.5 w-3.5" />
+          </button>
         </div>
       </div>
-      <button onClick={onCopy} className="mt-4 min-h-24 flex-1 text-left" title="复制到剪贴板">
-        <p className={`line-clamp-5 whitespace-pre-wrap break-words text-sm leading-6 text-gray-700 ${item.kind === "code" ? "font-mono" : ""}`}>
+      <button onClick={onCopy} className="mt-2 min-h-16 flex-1 text-left" title="复制到剪贴板">
+        <p className={`line-clamp-4 whitespace-pre-wrap break-words text-[13px] leading-5 text-gray-700 ${item.kind === "code" ? "font-mono" : ""}`}>
           {item.content}
         </p>
       </button>
-      <div className="mt-4 flex items-center justify-between border-t border-gray-100 pt-3 text-[11px] text-gray-400">
+      <div className="mt-2 flex items-center justify-between border-t border-gray-100 pt-2 text-[11px] text-gray-400">
         <span>{formatRelativeTime(item.last_copied_at)} · {shortDevice(item.source_device)}</span>
-        <span className={copied ? "font-medium text-emerald-600" : ""}>{copied ? "已复制" : item.capture_count > 1 ? `${item.capture_count} 次` : "点击复制"}</span>
+        <span className={`flex items-center gap-1 ${copied ? "font-medium text-emerald-600" : ""}`}>
+          {copied ? "已复制" : <><Copy className="h-3 w-3" />{item.capture_count > 1 ? `${item.capture_count} 次` : "点击复制"}</>}
+        </span>
       </div>
     </article>
   );

@@ -595,6 +595,24 @@ impl Database {
         Ok(rows > 0)
     }
 
+    pub fn delete_note_version(&self, version_id: i64) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let rows = conn.execute(
+            "DELETE FROM note_versions WHERE id = ?1",
+            params![version_id],
+        )?;
+        Ok(rows > 0)
+    }
+
+    pub fn clear_note_versions(&self, note_id: &str) -> Result<usize> {
+        let conn = self.conn.lock().unwrap();
+        let rows = conn.execute(
+            "DELETE FROM note_versions WHERE note_id = ?1 AND is_pinned = 0",
+            params![note_id],
+        )?;
+        Ok(rows)
+    }
+
     pub fn restore_note_version(&self, note_id: &str, version_id: i64) -> Result<Option<Note>> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;

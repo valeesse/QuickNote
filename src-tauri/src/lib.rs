@@ -75,6 +75,8 @@ pub fn run() {
             commands::get_note_versions,
             commands::restore_note_version,
             commands::toggle_version_pin,
+            commands::delete_note_version,
+            commands::clear_note_versions,
             commands::save_attachment,
             commands::get_attachment,
             commands::cleanup_attachments,
