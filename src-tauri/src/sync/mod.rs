@@ -399,19 +399,17 @@ fn validate_envelope(
     if !matches!(envelope.operation.as_str(), "upsert" | "delete") {
         return Err(format!("unsupported operation {}", envelope.operation));
     }
-    if envelope.entity_type == "note" && envelope.operation == "upsert" {
-        if envelope.note.as_ref().map(|note| note.id.as_str()) != Some(envelope.entity_id.as_str())
+    if envelope.entity_type == "note" && envelope.operation == "upsert"
+        && envelope.note.as_ref().map(|note| note.id.as_str()) != Some(envelope.entity_id.as_str())
         {
             return Err("note payload does not match its entity ID".to_string());
         }
-    }
-    if envelope.entity_type == "attachment" && envelope.operation == "upsert" {
-        if envelope.attachment.as_ref().map(|item| item.id.as_str())
+    if envelope.entity_type == "attachment" && envelope.operation == "upsert"
+        && envelope.attachment.as_ref().map(|item| item.id.as_str())
             != Some(envelope.entity_id.as_str())
         {
             return Err("attachment payload does not match its entity ID".to_string());
         }
-    }
     if envelope.entity_type == "clipboard"
         && envelope.clipboard.as_ref().map(|item| item.id.as_str())
             != Some(envelope.entity_id.as_str())
