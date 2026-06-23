@@ -21,6 +21,7 @@ thiserror = "1"
 tokio = { version = "1", features = ["full"] }
 base64 = "0.22"
 sha2 = "0.10"
+image = { version = "0.25", default-features = false, features = ["png"] }
 async-trait = "0.1"
 quick-xml = "0.38"
 percent-encoding = "2"

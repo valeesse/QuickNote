@@ -20,7 +20,7 @@ export interface NoteSummary {
 
 export interface ClipboardItem {
   id: string;
-  kind: "text" | "link" | "code";
+  kind: "text" | "link" | "code" | "image" | "rich";
   content: string;
   preview: string;
   source_device: string;

@@ -86,6 +86,7 @@ function MainApp({ userEmail, onLogout }: { userEmail: string; onLogout: () => v
         viewMode={viewMode}
         onViewModeChange={setViewMode}
         clipboardCount={clipboard.items.length}
+        clipboardItems={clipboard.items}
         notes={notes}
         activeNoteId={activeNote?.id ?? null}
         searchQuery={searchQuery}
@@ -201,7 +202,7 @@ function MainApp({ userEmail, onLogout }: { userEmail: string; onLogout: () => v
       {deletedToast && (
         <div
           role="status"
-          className="fixed right-4 bottom-20 z-40 flex max-w-sm items-center gap-3 rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-700 shadow-lg md:bottom-4"
+          className="animate-toast-in fixed right-4 bottom-20 z-40 flex max-w-sm items-center gap-3 rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-700 shadow-lg md:bottom-4"
         >
           <span className="min-w-0 flex-1 truncate">已删除「{deletedToast.title}」</span>
           <button
@@ -215,7 +216,7 @@ function MainApp({ userEmail, onLogout }: { userEmail: string; onLogout: () => v
       )}
 
       {errorMessage && (
-        <div className="fixed right-4 bottom-4 max-w-sm rounded border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow">
+        <div className="animate-toast-in fixed right-4 bottom-4 max-w-sm rounded border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow">
           {errorMessage}
         </div>
       )}

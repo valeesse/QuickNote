@@ -161,8 +161,20 @@ function ClipboardCard({
       ? "bg-blue-50 text-blue-700"
       : item.kind === "code"
         ? "bg-emerald-50 text-emerald-700"
-        : "bg-violet-50 text-violet-700";
-  const label = item.kind === "link" ? "链接" : item.kind === "code" ? "代码" : "文本";
+        : item.kind === "image" || item.kind === "rich"
+          ? "bg-rose-50 text-rose-700"
+          : "bg-violet-50 text-violet-700";
+  const label =
+    item.kind === "link"
+      ? "链接"
+      : item.kind === "code"
+        ? "代码"
+        : item.kind === "image"
+          ? "图片"
+          : item.kind === "rich"
+            ? "图文"
+            : "文本";
+  const isRich = item.kind === "rich" || item.kind === "image";
 
   return (
     <article className="clipboard-card group">
@@ -195,11 +207,18 @@ function ClipboardCard({
         </div>
       </div>
       <button type="button" onClick={onCopy} className="focus-ring clipboard-card__copy" title="复制到剪贴板">
-        <p
-          className={`line-clamp-4 whitespace-pre-wrap break-words text-[13px] leading-5 text-gray-700 ${item.kind === "code" ? "font-mono" : ""}`}
-        >
-          {item.content}
-        </p>
+        {isRich ? (
+          <div
+            className="clipboard-card__rich line-clamp-4"
+            dangerouslySetInnerHTML={{ __html: sanitizeClipboardHtml(item.content) }}
+          />
+        ) : (
+          <p
+            className={`line-clamp-4 whitespace-pre-wrap break-words text-[13px] leading-5 text-gray-700 ${item.kind === "code" ? "font-mono" : ""}`}
+          >
+            {item.content}
+          </p>
+        )}
       </button>
       <div className="clipboard-card__meta">
         <span>
@@ -222,4 +241,60 @@ function ClipboardCard({
 
 function shortDevice(device: string): string {
   return device ? `设备 ${device.slice(0, 6)}` : "本机";
+}
+
+function sanitizeClipboardHtml(html: string): string {
+  if (typeof document === "undefined") return "";
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  const allowedTags = new Set([
+    "A",
+    "B",
+    "BR",
+    "CODE",
+    "DIV",
+    "EM",
+    "I",
+    "IMG",
+    "LI",
+    "OL",
+    "P",
+    "PRE",
+    "SPAN",
+    "STRONG",
+    "UL",
+  ]);
+  const allowedAttrs = new Set(["alt", "href", "src", "title"]);
+
+  for (const element of Array.from(doc.body.querySelectorAll("*"))) {
+    if (!allowedTags.has(element.tagName)) {
+      element.replaceWith(...Array.from(element.childNodes));
+      continue;
+    }
+    for (const attr of Array.from(element.attributes)) {
+      const name = attr.name.toLowerCase();
+      const value = attr.value.trim();
+      if (!allowedAttrs.has(name)) {
+        element.removeAttribute(attr.name);
+        continue;
+      }
+      if ((name === "src" || name === "href") && !isSafeClipboardUrl(value)) {
+        element.removeAttribute(attr.name);
+      }
+    }
+    if (element.tagName === "A") {
+      element.setAttribute("target", "_blank");
+      element.setAttribute("rel", "noreferrer");
+    }
+  }
+
+  return doc.body.innerHTML;
+}
+
+function isSafeClipboardUrl(value: string): boolean {
+  return (
+    value.startsWith("data:image/") ||
+    value.startsWith("https://") ||
+    value.startsWith("http://") ||
+    value.startsWith("blob:")
+  );
 }

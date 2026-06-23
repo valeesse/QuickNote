@@ -977,9 +977,9 @@ impl Database {
                 "clipboard content is empty".to_string(),
             ));
         }
-        if normalized.len() > 1_000_000 {
+        if normalized.len() > 5_000_000 {
             return Err(rusqlite::Error::InvalidParameterName(
-                "clipboard content exceeds 1 MB".to_string(),
+                "clipboard content exceeds 5 MB".to_string(),
             ));
         }
         let id = format!(
@@ -987,7 +987,7 @@ impl Database {
             Sha256::digest(format!("clipboard:text:{normalized}"))
         );
         let kind = classify_clipboard_content(&normalized);
-        let preview = truncate_chars(&normalized.replace('\n', " "), 240);
+        let preview = clipboard_preview(&normalized, &kind);
         let now = Utc::now().to_rfc3339();
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
@@ -1018,7 +1018,7 @@ impl Database {
                     last_copied_at, capture_count, is_pinned, is_deleted
              FROM clipboard_items
              WHERE is_deleted = 0 AND (?1 = '%%' OR content LIKE ?1)
-             ORDER BY is_pinned DESC, last_copied_at DESC
+             ORDER BY is_pinned DESC, created_at DESC
              LIMIT ?2",
         )?;
         let items = stmt
@@ -1070,21 +1070,6 @@ impl Database {
         }
         tx.commit()?;
         Ok(changed > 0)
-    }
-
-    pub fn touch_clipboard_item(&self, id: &str) -> Result<()> {
-        let now = Utc::now().to_rfc3339();
-        let mut conn = self.conn.lock().unwrap();
-        let tx = conn.transaction()?;
-        let changed = tx.execute(
-            "UPDATE clipboard_items SET last_copied_at = ?1, updated_at = ?1 WHERE id = ?2",
-            params![now, id],
-        )?;
-        if changed > 0 {
-            enqueue_change(&tx, "clipboard", id, "upsert", &now)?;
-        }
-        tx.commit()?;
-        Ok(())
     }
 
     pub fn apply_remote_clipboard(
@@ -1272,7 +1257,11 @@ fn normalize_clipboard_content(content: &str) -> String {
 
 fn classify_clipboard_content(content: &str) -> String {
     let trimmed = content.trim();
-    if (trimmed.starts_with("https://") || trimmed.starts_with("http://"))
+    if trimmed.starts_with("data:image/") || trimmed.starts_with("<img ") {
+        "image".to_string()
+    } else if looks_like_rich_clipboard(content) {
+        "rich".to_string()
+    } else if (trimmed.starts_with("https://") || trimmed.starts_with("http://"))
         && !trimmed.chars().any(char::is_whitespace)
     {
         "link".to_string()
@@ -1285,6 +1274,44 @@ fn classify_clipboard_content(content: &str) -> String {
     } else {
         "text".to_string()
     }
+}
+
+fn looks_like_rich_clipboard(content: &str) -> bool {
+    let lowered = content.to_ascii_lowercase();
+    lowered.contains("<img ")
+        || lowered.contains("<p")
+        || lowered.contains("<br")
+        || lowered.contains("<div")
+        || lowered.contains("<span")
+}
+
+fn clipboard_preview(content: &str, kind: &str) -> String {
+    if kind == "image" {
+        return "图片".to_string();
+    }
+    let preview = if kind == "rich" {
+        strip_html_tags(content)
+    } else {
+        content.replace('\n', " ")
+    };
+    truncate_chars(&preview, 240)
+}
+
+fn strip_html_tags(content: &str) -> String {
+    let mut output = String::with_capacity(content.len());
+    let mut in_tag = false;
+    for ch in content.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => {
+                in_tag = false;
+                output.push(' ');
+            }
+            _ if !in_tag => output.push(ch),
+            _ => {}
+        }
+    }
+    output.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn get_entity_version_locked(

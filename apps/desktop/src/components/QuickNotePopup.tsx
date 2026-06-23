@@ -72,7 +72,7 @@ export function QuickNotePopup() {
   }, [saveAndClose]);
 
   return (
-    <div className="flex h-screen flex-col bg-[#f7f7f9]">
+    <div className="animate-popup-in flex h-screen flex-col bg-[#f7f7f9]">
       {/* Header */}
       <div className="flex items-center gap-2 border-b border-gray-200 bg-white px-4 py-3">
         <FileEdit className="h-4 w-4 text-violet-600" />

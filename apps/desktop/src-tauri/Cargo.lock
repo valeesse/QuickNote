@@ -2763,6 +2763,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "chrono",
+ "image",
  "keyring",
  "percent-encoding",
  "quick-xml 0.38.4",

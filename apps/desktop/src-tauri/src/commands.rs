@@ -1,8 +1,10 @@
 use crate::db::{ClipboardItem, Database, Note, NoteSummary, NoteVersion};
 use crate::sync::{SyncConfig, SyncConfigInput, SyncReport, SyncService};
 use base64::{engine::general_purpose, Engine as _};
+use image::{codecs::png::PngEncoder, ColorType, ImageEncoder};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use std::io::Cursor;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, State};
@@ -216,7 +218,14 @@ pub fn capture_clipboard(
     sync: State<'_, Arc<SyncService>>,
     capture_state: State<ClipboardCaptureState>,
 ) -> Result<Option<ClipboardItem>, String> {
-    let content = app.clipboard().read_text().map_err(|e| e.to_string())?;
+    let content = match app.clipboard().read_text() {
+        Ok(text) if !text.trim().is_empty() => text,
+        _ => match read_clipboard_image_html(&app) {
+            Ok(Some(html)) => html,
+            Ok(None) => return Ok(None),
+            Err(error) => return Err(error),
+        },
+    };
     if content.trim().is_empty() {
         return Ok(None);
     }
@@ -262,14 +271,18 @@ pub fn copy_clipboard_item(
         return Ok(false);
     };
     app.clipboard()
-        .write_text(item.content.clone())
+        .write_text(clipboard_plain_text(&item))
         .map_err(|e| e.to_string())?;
+    if item.kind == "rich" || item.kind == "image" {
+        let _ = app
+            .clipboard()
+            .write_html(item.content.clone(), Some(clipboard_plain_text(&item)));
+    }
     *capture_state
         .fingerprint
         .lock()
         .map_err(|_| "clipboard capture state is unavailable".to_string())? =
         Some(format!("{:x}", Sha256::digest(item.content.as_bytes())));
-    db.touch_clipboard_item(&id).map_err(|e| e.to_string())?;
     Ok(true)
 }
 
@@ -306,6 +319,50 @@ fn infer_extension(data_url: &str, filename: &str) -> String {
     } else {
         "webp".to_string()
     }
+}
+
+fn read_clipboard_image_html(app: &AppHandle) -> Result<Option<String>, String> {
+    let image = match app.clipboard().read_image() {
+        Ok(image) => image,
+        Err(_) => return Ok(None),
+    };
+    let bytes = image.rgba();
+    if bytes.is_empty() || bytes.len() > 8 * 1024 * 1024 {
+        return Ok(None);
+    }
+    let mut png = Vec::new();
+    PngEncoder::new(Cursor::new(&mut png))
+        .write_image(bytes, image.width(), image.height(), ColorType::Rgba8.into())
+        .map_err(|e| format!("Failed to encode clipboard image: {e}"))?;
+    let data_url = format!("data:image/png;base64,{}", general_purpose::STANDARD.encode(png));
+    Ok(Some(format!(
+        r#"<img src="{data_url}" alt="剪贴板图片" title="剪贴板图片">"#
+    )))
+}
+
+fn clipboard_plain_text(item: &ClipboardItem) -> String {
+    if item.kind == "rich" || item.kind == "image" {
+        strip_html_tags(&item.content)
+    } else {
+        item.content.clone()
+    }
+}
+
+fn strip_html_tags(content: &str) -> String {
+    let mut output = String::with_capacity(content.len());
+    let mut in_tag = false;
+    for ch in content.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => {
+                in_tag = false;
+                output.push(' ');
+            }
+            _ if !in_tag => output.push(ch),
+            _ => {}
+        }
+    }
+    output.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn infer_mime_type(data_url: &str, extension: &str) -> String {

@@ -44,9 +44,8 @@ export function useClipboard() {
     if (copied) {
       setCopiedId(id);
       setTimeout(() => setCopiedId((current) => current === id ? null : current), 1_200);
-      await loadItems();
     }
-  }, [loadItems]);
+  }, []);
 
   const togglePin = useCallback(async (id: string) => {
     await invoke("toggle_clipboard_pin", { id });

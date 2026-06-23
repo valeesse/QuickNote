@@ -119,6 +119,7 @@ export default function App() {
         viewMode={viewMode}
         onViewModeChange={setViewMode}
         clipboardCount={clipboard.items.length}
+        clipboardItems={clipboard.items}
         notes={notes}
         activeNoteId={activeNote?.id ?? null}
         searchQuery={searchQuery}
@@ -206,7 +207,7 @@ export default function App() {
       {deletedToast && (
         <div
           role="status"
-          className="fixed right-4 bottom-20 z-40 flex max-w-sm items-center gap-3 rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-700 shadow-lg md:bottom-4"
+          className="animate-toast-in fixed right-4 bottom-20 z-40 flex max-w-sm items-center gap-3 rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-700 shadow-lg md:bottom-4"
         >
           <span className="min-w-0 flex-1 truncate">已删除「{deletedToast.title}」</span>
           <button
@@ -220,7 +221,7 @@ export default function App() {
       )}
 
       {errorMessage && (
-        <div className="fixed right-4 bottom-4 max-w-sm rounded border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow">
+        <div className="animate-toast-in fixed right-4 bottom-4 max-w-sm rounded border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow">
           {errorMessage}
         </div>
       )}
@@ -318,9 +319,9 @@ function SyncSettingsPanel({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end bg-black/20" onMouseDown={onClose}>
+    <div className="animate-fade-in fixed inset-0 z-50 flex justify-end bg-black/20" onMouseDown={onClose}>
       <div
-        className="h-full w-full max-w-sm border-l border-gray-200 bg-white shadow-xl overflow-y-auto"
+        className="animate-drawer-in h-full w-full max-w-sm border-l border-gray-200 bg-white shadow-xl overflow-y-auto"
         onMouseDown={(event) => event.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4 sticky top-0 bg-white z-10">
@@ -405,7 +406,7 @@ function TrashPanel({
   onPurge: (id: string) => void;
 }) {
   return (
-    <div className="fixed inset-y-0 right-0 z-40 w-80 border-l border-gray-200 bg-white shadow-xl">
+    <div className="animate-drawer-in fixed inset-y-0 right-0 z-40 w-80 border-l border-gray-200 bg-white shadow-xl">
       <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3">
         <h2 className="text-sm font-semibold text-gray-800">回收站</h2>
         <button type="button" onClick={onClose} className="w-7 h-7 rounded hover:bg-gray-100 flex items-center justify-center" title="关闭" aria-label="关闭">
@@ -450,7 +451,7 @@ function HistoryPanel({
   const unpinnedCount = versions.filter((v) => !v.is_pinned).length;
 
   return (
-    <div className="fixed inset-y-0 right-0 z-40 w-80 border-l border-gray-200 bg-white shadow-xl">
+    <div className="animate-drawer-in fixed inset-y-0 right-0 z-40 w-80 border-l border-gray-200 bg-white shadow-xl">
       <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3">
         <div>
           <h2 className="text-sm font-semibold text-gray-800">历史版本</h2>

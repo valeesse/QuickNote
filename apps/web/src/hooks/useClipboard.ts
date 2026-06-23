@@ -26,9 +26,9 @@ export function useClipboard() {
 
   const capture = useCallback(async () => {
     try {
-      const text = await navigator.clipboard.readText();
-      if (text.trim()) {
-        await clipboardApi.capture(text);
+      const payload = await readClipboardPayload();
+      if (payload.content.trim()) {
+        await clipboardApi.capture(payload.content, payload.kind);
         await loadItems();
       }
       setError(null);
@@ -83,4 +83,44 @@ export function useClipboard() {
     deleteItem,
     loadItems,
   };
+}
+
+async function readClipboardPayload(): Promise<{ content: string; kind?: string }> {
+  if ("read" in navigator.clipboard) {
+    try {
+      const items = await navigator.clipboard.read();
+      for (const item of items) {
+        if (item.types.includes("text/html")) {
+          const blob = await item.getType("text/html");
+          const html = await blob.text();
+          if (html.trim()) return { content: html, kind: "rich" };
+        }
+      }
+      for (const item of items) {
+        const imageType = item.types.find((type) => type.startsWith("image/"));
+        if (imageType) {
+          const blob = await item.getType(imageType);
+          const dataUrl = await blobToDataUrl(blob);
+          return {
+            content: `<img src="${dataUrl}" alt="剪贴板图片" title="剪贴板图片">`,
+            kind: "image",
+          };
+        }
+      }
+    } catch {
+      // Browser support and permissions vary; fall back to readText below.
+    }
+  }
+
+  const text = await navigator.clipboard.readText();
+  return { content: text };
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
 }

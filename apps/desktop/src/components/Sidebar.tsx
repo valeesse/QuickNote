@@ -12,14 +12,16 @@ import {
   FileText,
   Clipboard,
 } from "lucide-react";
-import type { AppView, NoteSummary, SyncStatus } from "@/types";
+import type { AppView, ClipboardItem, NoteSummary, SyncStatus } from "@/types";
 import { NoteCard, NoteSectionLabel } from "@ui/components/NoteCard";
-import { stripMarkdown } from "@ui/utils/html";
+import { formatRelativeTime } from "@ui/utils/format";
+import { stripHtml, stripMarkdown } from "@ui/utils/html";
 
 interface SidebarProps {
   viewMode: AppView;
   onViewModeChange: (mode: AppView) => void;
   clipboardCount: number;
+  clipboardItems: ClipboardItem[];
   notes: NoteSummary[];
   activeNoteId: string | null;
   searchQuery: string;
@@ -38,6 +40,7 @@ export function Sidebar({
   viewMode,
   onViewModeChange,
   clipboardCount,
+  clipboardItems,
   notes,
   activeNoteId,
   searchQuery,
@@ -104,6 +107,14 @@ export function Sidebar({
   const unpinnedNotes = useMemo(() => notes.filter((n) => !n.is_pinned), [notes]);
   const hasPinnedNotes = pinnedNotes.length > 0;
   const hasUnpinnedNotes = unpinnedNotes.length > 0;
+  const pinnedClipboardItems = useMemo(
+    () => clipboardItems.filter((item) => item.is_pinned).slice(0, 4),
+    [clipboardItems]
+  );
+  const recentClipboardItems = useMemo(
+    () => clipboardItems.filter((item) => !item.is_pinned).slice(0, 8),
+    [clipboardItems]
+  );
 
   const NoteItem = ({ index, style }: { index: number; style: React.CSSProperties }) => {
     // Calculate which note to show at this index
@@ -252,13 +263,7 @@ export function Sidebar({
           />
         )}
       </div> : (
-        <div className="flex flex-1 flex-col items-center justify-center px-7 text-center">
-          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-violet-100 text-violet-700">
-            <Clipboard className="h-7 w-7" />
-          </div>
-          <h3 className="mt-4 text-sm font-semibold text-gray-700">跨设备剪贴板</h3>
-          <p className="mt-2 text-xs leading-5 text-gray-400">复制的文本、链接与代码片段会保存在本地，并复用 WebDAV 安全同步。</p>
-        </div>
+        <ClipboardSidebar items={recentClipboardItems} pinnedItems={pinnedClipboardItems} />
       )}
 
       {/* Footer */}
@@ -302,7 +307,7 @@ export function Sidebar({
         <div
           role="menu"
           aria-label="便签操作"
-          className="fixed z-50 min-w-[140px] animate-fade-in rounded-lg border border-gray-200 bg-white py-1 shadow-lg"
+          className="animate-menu-in fixed z-50 min-w-[140px] rounded-lg border border-gray-200 bg-white py-1 shadow-lg"
           style={{ left: contextMenu.x, top: contextMenu.y }}
           onClick={(event) => event.stopPropagation()}
         >
@@ -353,4 +358,66 @@ function getMenuPosition(x: number, y: number): { x: number; y: number } {
     x: Math.min(x, window.innerWidth - menuWidth - margin),
     y: Math.min(y, window.innerHeight - menuHeight - margin),
   };
+}
+
+function ClipboardSidebar({
+  items,
+  pinnedItems,
+}: {
+  items: ClipboardItem[];
+  pinnedItems: ClipboardItem[];
+}) {
+  if (items.length === 0 && pinnedItems.length === 0) {
+    return (
+      <div className="clipboard-sidebar__empty">
+        <div>
+          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-violet-100 text-violet-700">
+            <Clipboard className="h-7 w-7" />
+          </div>
+          <h3 className="mt-4 text-sm font-semibold text-gray-700">跨设备剪贴板</h3>
+          <p className="mt-2 text-xs leading-5 text-gray-400">复制文本、链接、代码或图文内容后会出现在这里。</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="clipboard-sidebar">
+      {pinnedItems.length > 0 && (
+        <section className="clipboard-sidebar__section">
+          <h3 className="clipboard-sidebar__title">固定</h3>
+          {pinnedItems.map((item) => <ClipboardSidebarItem key={item.id} item={item} />)}
+        </section>
+      )}
+      <section className="clipboard-sidebar__section">
+        <h3 className="clipboard-sidebar__title">最近</h3>
+        {items.map((item) => <ClipboardSidebarItem key={item.id} item={item} />)}
+      </section>
+    </div>
+  );
+}
+
+function ClipboardSidebarItem({ item }: { item: ClipboardItem }) {
+  return (
+    <div className="clipboard-sidebar__item" title={stripClipboardPreview(item)}>
+      <div className="clipboard-sidebar__item-title">
+        <span>{clipboardKindLabel(item.kind)}</span>
+        <span className="text-[10px] font-normal text-gray-400">{formatRelativeTime(item.last_copied_at)}</span>
+      </div>
+      <p className="clipboard-sidebar__item-text">{stripClipboardPreview(item)}</p>
+    </div>
+  );
+}
+
+function clipboardKindLabel(kind: ClipboardItem["kind"]): string {
+  if (kind === "link") return "链接";
+  if (kind === "code") return "代码";
+  if (kind === "image") return "图片";
+  if (kind === "rich") return "图文";
+  return "文本";
+}
+
+function stripClipboardPreview(item: ClipboardItem): string {
+  const preview = item.preview || item.content;
+  return stripMarkdown(stripHtml(preview)).replace(/\s+/g, " ").trim() || "空剪贴板内容";
 }

@@ -14,7 +14,7 @@ pub async fn list_items(
     State(state): State<Arc<AppState>>,
     AuthUser(user_id): AuthUser,
 ) -> Result<Json<Vec<ClipboardItem>>, AppError> {
-    let query = format!("SELECT {COLUMNS} FROM clipboard_items WHERE user_id=$1 AND is_deleted=false ORDER BY is_pinned DESC,last_copied_at DESC LIMIT 300");
+    let query = format!("SELECT {COLUMNS} FROM clipboard_items WHERE user_id=$1 AND is_deleted=false ORDER BY is_pinned DESC,created_at DESC LIMIT 300");
     Ok(Json(
         sqlx::query_as(&query)
             .bind(user_id)
@@ -31,16 +31,16 @@ pub async fn capture(
     if req.content.trim().is_empty() {
         return Err(AppError::BadRequest("Content cannot be empty".into()));
     }
-    if req.content.len() > 2 * 1024 * 1024 {
+    if req.content.len() > 5 * 1024 * 1024 {
         return Err(AppError::BadRequest(
-            "Clipboard content exceeds 2 MB".into(),
+            "Clipboard content exceeds 5 MB".into(),
         ));
     }
     let id = format!("{:x}", Sha256::digest(req.content.as_bytes()));
     let kind = req.kind.unwrap_or_else(|| detect_kind(&req.content));
     let device = req.source_device.unwrap_or_else(|| "web".into());
     let now = chrono::Utc::now().to_rfc3339();
-    let preview: String = req.content.chars().take(200).collect();
+    let preview = clipboard_preview(&req.content, &kind);
     let mut tx = state.db.inner().begin().await?;
     let query = format!("INSERT INTO clipboard_items (id,user_id,kind,content,preview,source_device,created_at,updated_at,last_copied_at,capture_count,is_pinned,is_deleted) VALUES ($1,$2,$3,$4,$5,$6,$7,$7,$7,1,false,false) ON CONFLICT (user_id,id) DO UPDATE SET capture_count=clipboard_items.capture_count+1,last_copied_at=EXCLUDED.last_copied_at,updated_at=EXCLUDED.updated_at,is_deleted=false RETURNING {COLUMNS}");
     let item: ClipboardItem = sqlx::query_as(&query)
@@ -108,11 +108,53 @@ fn notify(state: &AppState, user_id: uuid::Uuid, id: &str, operation: &str) {
 }
 
 fn detect_kind(content: &str) -> String {
-    if content.starts_with("http://") || content.starts_with("https://") {
+    if content.starts_with("data:image/") || content.starts_with("<img ") {
+        "image".into()
+    } else if looks_like_rich_clipboard(content) {
+        "rich".into()
+    } else if content.starts_with("http://") || content.starts_with("https://") {
         "link".into()
     } else if content.contains("fn ") || content.contains("function ") || content.contains("=>") {
         "code".into()
     } else {
         "text".into()
     }
+}
+
+fn looks_like_rich_clipboard(content: &str) -> bool {
+    let lowered = content.to_ascii_lowercase();
+    lowered.contains("<img ")
+        || lowered.contains("<p")
+        || lowered.contains("<br")
+        || lowered.contains("<div")
+        || lowered.contains("<span")
+}
+
+fn clipboard_preview(content: &str, kind: &str) -> String {
+    if kind == "image" {
+        return "图片".into();
+    }
+    let preview = if kind == "rich" {
+        strip_html_tags(content)
+    } else {
+        content.replace('\n', " ")
+    };
+    preview.chars().take(200).collect()
+}
+
+fn strip_html_tags(content: &str) -> String {
+    let mut output = String::with_capacity(content.len());
+    let mut in_tag = false;
+    for ch in content.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => {
+                in_tag = false;
+                output.push(' ');
+            }
+            _ if !in_tag => output.push(ch),
+            _ => {}
+        }
+    }
+    output.split_whitespace().collect::<Vec<_>>().join(" ")
 }
