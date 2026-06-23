@@ -3,6 +3,7 @@ import { Sidebar } from "@/components/Sidebar";
 import { useNotes } from "@/hooks/useNotes";
 import { useSync } from "@/hooks/useSync";
 import { useClipboard } from "@/hooks/useClipboard";
+import { invoke } from "@/utils/tauri";
 import { ClipboardPanel } from "@ui/components/ClipboardPanel";
 import { EmptyState } from "@ui/components/EmptyState";
 import { EditorSkeleton } from "@ui/components/EditorSkeleton";
@@ -15,7 +16,16 @@ import {
   Trash2,
   Eraser,
 } from "lucide-react";
-import type { AppView, NoteSummary, NoteVersion, SyncConfig, SyncConfigInput, SyncStatus } from "@/types";
+import type {
+  AppView,
+  NoteSummary,
+  NoteVersion,
+  ShortcutConfig,
+  ShortcutConfigInput,
+  SyncConfig,
+  SyncConfigInput,
+  SyncStatus,
+} from "@/types";
 
 const NoteEditor = React.lazy(() =>
   import("@/components/NoteEditor").then((m) => ({ default: m.NoteEditor }))
@@ -56,6 +66,8 @@ export default function App() {
   const [showTrash, setShowTrash] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [shortcutConfig, setShortcutConfig] = useState<ShortcutConfig | null>(null);
+  const [shortcutError, setShortcutError] = useState<string | null>(null);
   const [deletedToast, setDeletedToast] = useState<{
     title: string;
   } | null>(null);
@@ -71,6 +83,36 @@ export default function App() {
     const timer = window.setTimeout(() => setDeletedToast(null), 6_000);
     return () => window.clearTimeout(timer);
   }, [deletedToast]);
+
+  useEffect(() => {
+    let cancelled = false;
+    invoke<ShortcutConfig>("get_shortcut_config")
+      .then((config) => {
+        if (!cancelled) {
+          setShortcutConfig(config);
+          setShortcutError(null);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) setShortcutError(String(error));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const saveShortcuts = async (input: ShortcutConfigInput) => {
+    setShortcutError(null);
+    try {
+      const next = await invoke<ShortcutConfig>("set_shortcut_config", { config: input });
+      setShortcutConfig(next);
+      return next;
+    } catch (error) {
+      const message = String(error);
+      setShortcutError(message);
+      throw new Error(message);
+    }
+  };
 
   const handleDeleteNote = async (id: string) => {
     const note = notes.find((item) => item.id === id);
@@ -251,9 +293,12 @@ export default function App() {
           config={sync.config}
           status={sync.status}
           error={sync.error}
+          shortcutConfig={shortcutConfig}
+          shortcutError={shortcutError}
           onClose={() => setShowSettings(false)}
           onSave={sync.saveConfig}
           onSync={sync.syncNow}
+          onSaveShortcuts={saveShortcuts}
         />
       )}
     </div>
@@ -266,16 +311,22 @@ function SyncSettingsPanel({
   config,
   status,
   error,
+  shortcutConfig,
+  shortcutError,
   onClose,
   onSave,
   onSync,
+  onSaveShortcuts,
 }: {
   config: SyncConfig | null;
   status: SyncStatus;
   error: string | null;
+  shortcutConfig: ShortcutConfig | null;
+  shortcutError: string | null;
   onClose: () => void;
   onSave: (input: SyncConfigInput) => Promise<SyncConfig>;
   onSync: () => Promise<boolean>;
+  onSaveShortcuts: (input: ShortcutConfigInput) => Promise<ShortcutConfig>;
 }) {
   const [enabled, setEnabled] = useState(config?.enabled ?? false);
   const [endpoint, setEndpoint] = useState(config?.endpoint ?? "");
@@ -285,7 +336,11 @@ function SyncSettingsPanel({
   const [cloudUrl, setCloudUrl] = useState(config?.cloud_url ?? "");
   const [cloudEmail, setCloudEmail] = useState(config?.cloud_email ?? "");
   const [cloudPassword, setCloudPassword] = useState("");
+  const [quickNoteShortcut, setQuickNoteShortcut] = useState(shortcutConfig?.quick_note ?? "");
+  const [clipboardShortcut, setClipboardShortcut] = useState(shortcutConfig?.clipboard_history ?? "");
+  const [alternateShortcut, setAlternateShortcut] = useState(shortcutConfig?.quick_note_alternate ?? "");
   const [saving, setSaving] = useState(false);
+  const [savingShortcuts, setSavingShortcuts] = useState(false);
 
   useEffect(() => {
     if (!config) return;
@@ -296,6 +351,13 @@ function SyncSettingsPanel({
     setCloudUrl(config.cloud_url ?? "");
     setCloudEmail(config.cloud_email ?? "");
   }, [config]);
+
+  useEffect(() => {
+    if (!shortcutConfig) return;
+    setQuickNoteShortcut(shortcutConfig.quick_note);
+    setClipboardShortcut(shortcutConfig.clipboard_history);
+    setAlternateShortcut(shortcutConfig.quick_note_alternate);
+  }, [shortcutConfig]);
 
   const save = async () => {
     setSaving(true);
@@ -318,6 +380,19 @@ function SyncSettingsPanel({
     }
   };
 
+  const saveShortcuts = async () => {
+    setSavingShortcuts(true);
+    try {
+      await onSaveShortcuts({
+        quick_note: quickNoteShortcut,
+        clipboard_history: clipboardShortcut,
+        quick_note_alternate: alternateShortcut,
+      });
+    } finally {
+      setSavingShortcuts(false);
+    }
+  };
+
   return (
     <div className="animate-fade-in fixed inset-0 z-50 flex justify-end bg-black/20" onMouseDown={onClose}>
       <div
@@ -325,7 +400,7 @@ function SyncSettingsPanel({
         onMouseDown={(event) => event.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4 sticky top-0 bg-white z-10">
-          <h2 className="text-sm font-semibold text-gray-800">数据同步</h2>
+          <h2 className="text-sm font-semibold text-gray-800">设置</h2>
           <button type="button" onClick={onClose} className="h-7 w-7 rounded hover:bg-gray-100 flex items-center justify-center" title="关闭" aria-label="关闭">
             <X className="h-4 w-4 text-gray-500" />
           </button>
@@ -375,6 +450,30 @@ function SyncSettingsPanel({
             <span className="mb-1.5 block">密码</span>
             <input type="password" value={cloudPassword} onChange={(event) => setCloudPassword(event.target.value)} placeholder={cloudEnabled ? "留空则保持不变" : "云服务密码"} className="w-full rounded border border-gray-200 px-3 py-2 outline-none focus:border-violet-500" />
           </label>
+        </div>
+
+        {/* Shortcuts Section */}
+        <div className="space-y-5 border-t border-gray-200 p-5">
+          <div className="flex items-center gap-2 border-b border-gray-100 pb-2">
+            <span className="text-xs font-medium text-gray-400 uppercase tracking-wider">快捷键</span>
+          </div>
+          <label className="block text-sm text-gray-600">
+            <span className="mb-1.5 block">快速便签</span>
+            <input value={quickNoteShortcut} onChange={(event) => setQuickNoteShortcut(event.target.value)} placeholder="Ctrl+Alt+N" className="w-full rounded border border-gray-200 px-3 py-2 font-mono text-sm outline-none focus:border-emerald-500" />
+          </label>
+          <label className="block text-sm text-gray-600">
+            <span className="mb-1.5 block">剪贴板历史</span>
+            <input value={clipboardShortcut} onChange={(event) => setClipboardShortcut(event.target.value)} placeholder="Ctrl+Alt+C" className="w-full rounded border border-gray-200 px-3 py-2 font-mono text-sm outline-none focus:border-emerald-500" />
+          </label>
+          <label className="block text-sm text-gray-600">
+            <span className="mb-1.5 block">备用快速便签</span>
+            <input value={alternateShortcut} onChange={(event) => setAlternateShortcut(event.target.value)} placeholder="Ctrl+Alt+Q" className="w-full rounded border border-gray-200 px-3 py-2 font-mono text-sm outline-none focus:border-emerald-500" />
+          </label>
+          <p className="text-xs leading-5 text-gray-400">留空可关闭对应快捷键，保存后立即生效。</p>
+          {shortcutError && <p className="rounded bg-red-50 px-3 py-2 text-xs text-red-700">{shortcutError}</p>}
+          <button type="button" onClick={() => void saveShortcuts()} disabled={savingShortcuts} className="rounded bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50">
+            {savingShortcuts ? "保存中" : "保存快捷键"}
+          </button>
         </div>
 
         {/* Actions */}

@@ -1,5 +1,7 @@
 mod commands;
 mod db;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+mod shortcuts;
 mod sync;
 
 use commands::{AppPaths, ClipboardCaptureState};
@@ -76,7 +78,7 @@ fn show_main_window(app: &tauri::AppHandle) {
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-fn open_popup(app: &tauri::AppHandle, label: &str) {
+pub(crate) fn open_popup(app: &tauri::AppHandle, label: &str) {
     if let Some(window) = app.get_webview_window(label) {
         if let Ok(Some(monitor)) = window.current_monitor() {
             let screen = monitor.size();
@@ -98,10 +100,27 @@ fn open_popup(app: &tauri::AppHandle, label: &str) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    let shortcut_runtime = Arc::new(shortcuts::ShortcutRuntime::default());
+
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_clipboard_manager::init())
-        .setup(|app| {
+        .plugin(tauri_plugin_clipboard_manager::init());
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    let builder = {
+        let handler_runtime = shortcut_runtime.clone();
+        builder.plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(move |app, shortcut, event| {
+                    shortcuts::handle_shortcut(app, &handler_runtime, shortcut, event);
+                })
+                .build(),
+        )
+    };
+
+    builder
+        .setup(move |app| {
             let app_dir = app
                 .path()
                 .app_data_dir()
@@ -111,10 +130,10 @@ pub fn run() {
 
             let database = Database::new(app_dir.clone()).expect("failed to initialize database");
             let db_arc = Arc::new(database);
-            app.manage(db_arc);
+            app.manage(db_arc.clone());
 
             let sync_service = Arc::new(SyncService::new(app_dir.join("sync.json")));
-            app.manage(sync_service);
+            app.manage(sync_service.clone());
 
             app.manage(ClipboardCaptureState::default());
 
@@ -124,53 +143,25 @@ pub fn run() {
                 .expect("failed to get app data dir")
                 .join("attachments");
             std::fs::create_dir_all(&attachments_dir).expect("failed to create attachments dir");
-            app.manage(Arc::new(AppPaths { attachments_dir }));
+            let app_paths = Arc::new(AppPaths { attachments_dir });
+            app.manage(app_paths.clone());
 
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             {
                 // Setup system tray
                 setup_tray(app).expect("failed to setup system tray");
 
-                // Register global shortcuts
-                use tauri_plugin_global_shortcut::{
-                    Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState,
-                };
-
-                let shortcut_n =
-                    Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyN);
-                let shortcut_c =
-                    Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyC);
-                let shortcut_q =
-                    Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyQ);
-
-                app.handle()
-                    .plugin(
-                        tauri_plugin_global_shortcut::Builder::new()
-                            .with_handler(move |app, shortcut, event| {
-                                if event.state != ShortcutState::Pressed {
-                                    return;
-                                }
-                                if shortcut == &shortcut_n {
-                                    open_popup(app, "quick-note");
-                                } else if shortcut == &shortcut_c {
-                                    open_popup(app, "clipboard-popup");
-                                } else if shortcut == &shortcut_q {
-                                    open_popup(app, "quick-note");
-                                }
-                            })
-                            .build(),
-                    )
-                    .expect("failed to register global shortcut plugin");
-
-                for (name, shortcut) in [
-                    ("Ctrl+Alt+N", shortcut_n),
-                    ("Ctrl+Alt+C", shortcut_c),
-                    ("Ctrl+Alt+Q", shortcut_q),
-                ] {
-                    if let Err(error) = app.global_shortcut().register(shortcut) {
-                        eprintln!("failed to register {name}: {error}");
-                    }
+                let shortcut_service = Arc::new(shortcuts::ShortcutService::new(
+                    app_dir.join("shortcuts.json"),
+                    shortcut_runtime.clone(),
+                ));
+                let shortcut_config = shortcut_service.get_config();
+                if let Err(error) =
+                    shortcut_service.apply_config(app.handle(), &shortcut_config, false)
+                {
+                    eprintln!("failed to register startup shortcuts: {error}");
                 }
+                app.manage(shortcut_service);
 
                 // Handle main window close = minimize to tray
                 let main_window = app.get_webview_window("main").unwrap();
@@ -181,6 +172,8 @@ pub fn run() {
                         let _ = hide_handle.hide();
                     }
                 });
+                let _ = main_window.show();
+                let _ = main_window.set_focus();
             }
 
             Ok(())
@@ -213,6 +206,8 @@ pub fn run() {
             commands::copy_clipboard_item,
             commands::toggle_clipboard_pin,
             commands::delete_clipboard_item,
+            shortcuts::get_shortcut_config,
+            shortcuts::set_shortcut_config,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

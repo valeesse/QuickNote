@@ -40,6 +40,14 @@ export interface SyncConfigInput {
   cloud_password?: string;
 }
 
+export interface ShortcutConfig {
+  quick_note: string;
+  clipboard_history: string;
+  quick_note_alternate: string;
+}
+
+export type ShortcutConfigInput = ShortcutConfig;
+
 export interface SyncReport {
   pushed: number;
   pulled: number;
