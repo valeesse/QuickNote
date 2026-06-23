@@ -46,6 +46,7 @@ export function NoteEditor({
   const noteIdRef = useRef(note.id);
   const onUpdateRef = useRef(onUpdate);
   const lastAppliedContentRef = useRef(note.content || "");
+  const isApplyingExternalContentRef = useRef(note.content.includes("attachment://"));
   const objectUrlsRef = useRef<string[]>([]);
   const [findQuery, setFindQuery] = useState("");
   const [replaceQuery, setReplaceQuery] = useState("");
@@ -103,6 +104,7 @@ export function NoteEditor({
     ],
     content: note.content.includes("attachment://") ? "" : note.content || "",
     onUpdate: ({ editor }) => {
+      if (isApplyingExternalContentRef.current) return;
       const html = serializeAttachments(editor.getHTML());
       lastAppliedContentRef.current = html;
       setEditorRevision((revision) => revision + 1);
@@ -147,6 +149,10 @@ export function NoteEditor({
     editorRef.current = editor;
   }, [editor]);
 
+  useEffect(() => {
+    editor?.setEditable(!isSyncing);
+  }, [editor, isSyncing]);
+
   const findState = useMemo(
     () => (editor ? collectTextMatches(editor, findQuery, useRegex, editorRevision) : { matches: [], error: null }),
     [editor, editorRevision, findQuery, useRegex],
@@ -168,13 +174,18 @@ export function NoteEditor({
     if (!editor) return;
     const nextContent = note.content || "";
     let cancelled = false;
+    isApplyingExternalContentRef.current = true;
     void (async () => {
-      const hydrated = await hydrateAttachments(nextContent, objectUrlsRef.current);
-      if (cancelled) return;
-      if (nextContent !== lastAppliedContentRef.current || editor.isEmpty) {
-        editor.commands.setContent(hydrated, { emitUpdate: false });
-        lastAppliedContentRef.current = nextContent;
-        setEditorRevision((revision) => revision + 1);
+      try {
+        const hydrated = await hydrateAttachments(nextContent, objectUrlsRef.current);
+        if (cancelled) return;
+        if (nextContent !== lastAppliedContentRef.current || editor.isEmpty) {
+          editor.commands.setContent(hydrated, { emitUpdate: false });
+          lastAppliedContentRef.current = nextContent;
+          setEditorRevision((revision) => revision + 1);
+        }
+      } finally {
+        if (!cancelled) isApplyingExternalContentRef.current = false;
       }
     })().catch((error) => console.error("Attachment hydration failed", error));
     return () => { cancelled = true; };
@@ -216,7 +227,14 @@ export function NoteEditor({
   };
 
   return (
-    <div className="relative flex h-full flex-col">
+    <div className="relative flex h-full flex-col" aria-busy={isSyncing}>
+      {isSyncing && (
+        <div className="absolute inset-0 z-20 flex items-start justify-center bg-white/30 pt-16 cursor-wait">
+          <span className="rounded bg-gray-800 px-3 py-1.5 text-xs text-white shadow">
+            同步中，编辑暂时锁定
+          </span>
+        </div>
+      )}
       <Toolbar
         editor={editor}
         note={note}
@@ -312,18 +330,6 @@ export function NoteEditor({
           <span>历史版本</span>
         )}
       </div>
-
-      {isSyncing && (
-        <div className="absolute inset-0 z-20 flex items-center justify-center bg-white/70">
-          <div className="flex items-center gap-2 rounded-lg bg-white px-4 py-2 text-sm text-gray-600 shadow">
-            <svg className="h-4 w-4 animate-spin text-blue-500" viewBox="0 0 24 24" fill="none">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-            </svg>
-            同步中…
-          </div>
-        </div>
-      )}
     </div>
   );
 }

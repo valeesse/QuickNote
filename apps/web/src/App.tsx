@@ -11,7 +11,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useNotes } from "@/hooks/useNotes";
 import { useClipboard } from "@/hooks/useClipboard";
 import { useCloudEvents } from "@/hooks/useCloudEvents";
-import { Search, X } from "lucide-react";
+import { LogOut, RefreshCw, Search, Trash2, X } from "lucide-react";
 import type { AppView } from "@/types";
 
 const NoteEditor = React.lazy(() =>
@@ -72,9 +72,19 @@ function MainApp({ userEmail, onLogout }: { userEmail: string; onLogout: () => v
   const [deletedToast, setDeletedToast] = useState<{
     title: string;
   } | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  const refreshCloudData = React.useCallback(async () => {
+    setIsRefreshing(true);
+    try {
+      await Promise.all([loadNotes(), clipboard.loadItems()]);
+    } finally {
+      setIsRefreshing(false);
+    }
+  }, [clipboard, loadNotes]);
+
   useCloudEvents(() => {
-    void loadNotes();
-    void clipboard.loadItems();
+    void refreshCloudData();
   });
 
   useEffect(() => {
@@ -269,6 +279,7 @@ function MainApp({ userEmail, onLogout }: { userEmail: string; onLogout: () => v
                   saveStatus={saveStatus}
                   errorMessage={errorMessage}
                   onOpenHistory={handleOpenHistory}
+                  isSyncing={isRefreshing}
                 />
               ) : (
                 <EmptyState
@@ -287,7 +298,7 @@ function MainApp({ userEmail, onLogout }: { userEmail: string; onLogout: () => v
       </div>
 
       {/* Mobile bottom nav */}
-      <nav className="fixed inset-x-0 bottom-0 z-30 grid h-14 grid-cols-4 border-t border-gray-200 bg-white/95 px-2 backdrop-blur md:hidden">
+      <nav className="fixed inset-x-0 bottom-0 z-30 grid h-14 grid-cols-5 border-t border-gray-200 bg-white/95 px-2 backdrop-blur md:hidden">
         <button
           type="button"
           onClick={() => changeViewMode("notes")}
@@ -306,21 +317,35 @@ function MainApp({ userEmail, onLogout }: { userEmail: string; onLogout: () => v
         </button>
         <button
           type="button"
+          onClick={() => void refreshCloudData()}
+          disabled={isRefreshing}
+          className={`focus-ring flex items-center justify-center rounded-lg text-sm font-medium ${isRefreshing ? "text-blue-600" : "text-gray-500"}`}
+          aria-label={isRefreshing ? "正在刷新云端数据" : "刷新云端数据"}
+        >
+          <RefreshCw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
+        </button>
+        <button
+          type="button"
           onClick={async () => {
-            if (showTrash) { setShowTrash(false); return; }
+            if (showTrash) {
+              setShowTrash(false);
+              return;
+            }
             await loadDeletedNotes();
             openOnlyPanel("trash");
           }}
-          className={`focus-ring rounded-lg text-sm font-medium ${showTrash ? "text-blue-600" : "text-gray-500"}`}
+          className={`focus-ring flex items-center justify-center rounded-lg text-sm font-medium ${showTrash ? "text-blue-600" : "text-gray-500"}`}
+          aria-label={showTrash ? "收起回收站" : "打开回收站"}
         >
-          回收站
+          <Trash2 className="h-4 w-4" />
         </button>
         <button
           type="button"
           onClick={onLogout}
-          className="focus-ring rounded-lg text-sm font-medium text-gray-500"
+          className="focus-ring flex items-center justify-center rounded-lg text-sm font-medium text-gray-500"
+          aria-label={`退出登录，当前用户 ${userEmail}`}
         >
-          退出
+          <LogOut className="h-4 w-4" />
         </button>
       </nav>
 
