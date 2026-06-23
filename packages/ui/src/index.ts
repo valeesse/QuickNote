@@ -9,7 +9,10 @@ export type { NoteCardProps } from "./components/NoteCard";
 export { TrashPanel } from "./components/TrashPanel";
 export { HistoryPanel } from "./components/HistoryPanel";
 export { Sidebar } from "./components/Sidebar";
+export { FindReplacePanel } from "./components/FindReplacePanel";
 export type { SidebarProps, SidebarSyncStatus } from "./components/Sidebar";
+export { useFindReplace } from "./hooks/useFindReplace";
+export type { FindReplaceControls, TextMatch } from "./hooks/useFindReplace";
 
 // Utility functions
 export { compressImageToDataUrl } from "./utils/image";
