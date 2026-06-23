@@ -28,6 +28,8 @@ CREATE TABLE IF NOT EXISTS notes (
     PRIMARY KEY(user_id, id)
 );
 
+ALTER TABLE notes ADD COLUMN IF NOT EXISTS sort_order BIGINT NOT NULL DEFAULT 0;
+
 CREATE INDEX IF NOT EXISTS idx_notes_user_id ON notes(user_id);
 CREATE INDEX IF NOT EXISTS idx_notes_search ON notes USING GIN(search_vector);
 CREATE INDEX IF NOT EXISTS idx_notes_updated ON notes(user_id, is_pinned DESC, sort_order ASC, updated_at DESC);
