@@ -1,0 +1,83 @@
+/* ── Shared component styles ── */
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #d1d5db;
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #9ca3af;
+}
+
+/* Note card */
+.note-card {
+  appearance: none;
+  background: transparent;
+  color: inherit;
+  min-height: 88px;
+  transition: all 150ms ease-out;
+}
+
+.note-card:hover {
+  background: var(--qn-color-surface-muted);
+  box-shadow: var(--qn-shadow-card);
+}
+
+.note-card.active {
+  border-left: 3px solid var(--qn-color-primary-border);
+  background: var(--qn-color-primary-soft);
+}
+
+.note-card:focus-visible {
+  position: relative;
+  z-index: 1;
+  outline: none;
+  box-shadow: inset 0 0 0 2px rgb(37 99 235 / 0.45);
+}
+
+.focus-ring {
+  outline: none;
+}
+
+.focus-ring:focus-visible {
+  box-shadow: var(--qn-focus-ring);
+}
+
+/* Animations */
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.animate-slide-in {
+  animation: slideIn 150ms ease-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.animate-fade-in {
+  animation: fadeIn 200ms ease-out;
+}

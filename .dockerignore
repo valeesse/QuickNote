@@ -1,0 +1,14 @@
+.git
+.qoder
+.env
+**/.env*
+**/node_modules
+**/dist
+**/build
+**/target
+**/*.tsbuildinfo
+test-results
+docs
+tests
+apps/desktop
+*.log

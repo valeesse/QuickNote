@@ -1,0 +1,7 @@
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:15432:5432"
+  seaweedfs-filer:
+    ports:
+      - "127.0.0.1:18888:8888"

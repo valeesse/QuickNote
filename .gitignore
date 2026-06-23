@@ -7,9 +7,9 @@ node_modules/
 dist/
 build/
 
-# Tauri
-src-tauri/target/
-server/target/
+# Rust
+target/
+crates/*/Cargo.lock
 
 # IDE
 .vscode/
@@ -30,3 +30,4 @@ Thumbs.db
 # Logs
 *.log
 test-results/
+*.tsbuildinfo

@@ -1,1 +1,0 @@
-{"root":["./src/app.tsx","./src/main.tsx","./src/types.ts","./src/vite-env.d.ts","./src/api/client.ts","./src/components/clipboardpanel.tsx","./src/components/loginpage.tsx","./src/components/noteeditor.tsx","./src/components/sidebar.tsx","./src/hooks/useauth.ts","./src/hooks/useclipboard.ts","./src/hooks/usenotes.ts"],"version":"6.0.3"}

@@ -4,9 +4,7 @@ services:
     environment:
       POSTGRES_DB: quicknote
       POSTGRES_USER: quicknote
-      POSTGRES_PASSWORD: quicknote_dev
-    ports:
-      - "5432:5432"
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -18,10 +16,8 @@ services:
   seaweedfs-master:
     image: chrislusf/seaweedfs
     command: "master -ip=seaweedfs-master -port=9333 -defaultReplication=000"
-    ports:
-      - "9333:9333"
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9333/cluster/status"]
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:9333/cluster/status"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -29,8 +25,6 @@ services:
   seaweedfs-volume:
     image: chrislusf/seaweedfs
     command: "volume -mserver=seaweedfs-master:9333 -port=8080 -ip=seaweedfs-volume"
-    ports:
-      - "8080:8080"
     depends_on:
       seaweedfs-master:
         condition: service_healthy
@@ -40,35 +34,49 @@ services:
   seaweedfs-filer:
     image: chrislusf/seaweedfs
     command: "filer -master=seaweedfs-master:9333 -port=8888"
-    ports:
-      - "8888:8888"
     depends_on:
       seaweedfs-volume:
         condition: service_started
 
   api:
     build:
-      context: ./server
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: apps/server/Dockerfile
+      args:
+        HTTP_PROXY: ${DOCKER_BUILD_PROXY:-}
+        HTTPS_PROXY: ${DOCKER_BUILD_PROXY:-}
+        ALL_PROXY: ${DOCKER_BUILD_PROXY:-}
+        CARGO_MIRROR_URL: ${CARGO_MIRROR_URL:-sparse+https://rsproxy.cn/index/}
     environment:
-      DATABASE_URL: postgres://quicknote:quicknote_dev@postgres:5432/quicknote
-      JWT_SECRET: dev-secret-change-in-production
+      DATABASE_URL: postgres://quicknote:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/quicknote
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}
       SEAWEEDFS_FILER: http://seaweedfs-filer:8888
+      ALLOWED_ORIGIN: ${PUBLIC_ORIGIN:-http://localhost:8081}
       RUST_LOG: info
-    ports:
-      - "3000:3000"
     depends_on:
       postgres:
         condition: service_healthy
+      seaweedfs-filer:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3000/api/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
 
   web:
     build:
-      context: ./web
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        HTTP_PROXY: ${DOCKER_BUILD_PROXY:-}
+        HTTPS_PROXY: ${DOCKER_BUILD_PROXY:-}
+        ALL_PROXY: ${DOCKER_BUILD_PROXY:-}
     ports:
       - "8081:80"
     depends_on:
-      - api
+      api:
+        condition: service_healthy
 
 volumes:
   pgdata:

@@ -1,0 +1,29 @@
+:root {
+  --qn-color-text: #111827;
+  --qn-color-text-muted: #6b7280;
+  --qn-color-border: #e5e7eb;
+  --qn-color-surface: #ffffff;
+  --qn-color-surface-muted: #f9fafb;
+  --qn-color-primary: #2563eb;
+  --qn-color-primary-soft: #eff6ff;
+  --qn-color-primary-border: #3b82f6;
+  --qn-radius-sm: 0.375rem;
+  --qn-radius-md: 0.5rem;
+  --qn-radius-lg: 0.75rem;
+  --qn-focus-ring: 0 0 0 3px rgb(37 99 235 / 0.22);
+  --qn-shadow-card: 0 1px 2px rgb(0 0 0 / 0.05);
+}
+
+/* ── Base reset ── */
+* {
+  border-color: var(--qn-color-border);
+}
+
+body {
+  margin: 0;
+  background: var(--qn-color-surface-muted);
+  color: var(--qn-color-text);
+  font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
