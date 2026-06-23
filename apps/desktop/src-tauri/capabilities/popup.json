@@ -4,6 +4,7 @@
   "windows": ["clipboard-popup", "quick-note"],
   "permissions": [
     "core:default",
+    "core:window:allow-hide",
     "clipboard-manager:allow-read-text",
     "clipboard-manager:allow-write-text"
   ]

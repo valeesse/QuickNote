@@ -55,7 +55,7 @@ export function Sidebar({
 
   const handleContextMenu = (e: React.MouseEvent, noteId: string) => {
     e.preventDefault();
-    setContextMenu({ noteId, x: e.clientX, y: e.clientY });
+    setContextMenu({ noteId, ...getMenuPosition(e.clientX, e.clientY) });
   };
 
   const closeContextMenu = () => setContextMenu(null);
@@ -262,4 +262,14 @@ export function Sidebar({
       )}
     </div>
   );
+}
+
+function getMenuPosition(x: number, y: number): { x: number; y: number } {
+  const margin = 8;
+  const menuWidth = 160;
+  const menuHeight = 104;
+  return {
+    x: Math.min(x, window.innerWidth - menuWidth - margin),
+    y: Math.min(y, window.innerHeight - menuHeight - margin),
+  };
 }

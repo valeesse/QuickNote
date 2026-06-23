@@ -81,7 +81,7 @@ export function Sidebar({
   const handleContextMenu = useCallback(
     (e: React.MouseEvent, noteId: string) => {
       e.preventDefault();
-      setContextMenu({ noteId, x: e.clientX, y: e.clientY });
+      setContextMenu({ noteId, ...getMenuPosition(e.clientX, e.clientY) });
     },
     []
   );
@@ -234,6 +234,7 @@ export function Sidebar({
             </p>
             {!searchQuery && (
               <button
+                type="button"
                 onClick={onCreateNote}
                 className="mt-3 text-sm text-blue-600 hover:text-blue-700 font-medium"
               >
@@ -342,4 +343,14 @@ function formatSyncStatus(status: SyncStatus): string {
   if (status === "synced") return "同步完成";
   if (status === "error") return "同步失败";
   return "立即同步";
+}
+
+function getMenuPosition(x: number, y: number): { x: number; y: number } {
+  const margin = 8;
+  const menuWidth = 160;
+  const menuHeight = 104;
+  return {
+    x: Math.min(x, window.innerWidth - menuWidth - margin),
+    y: Math.min(y, window.innerHeight - menuHeight - margin),
+  };
 }

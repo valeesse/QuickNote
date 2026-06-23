@@ -232,7 +232,7 @@ export function NoteEditor({
         <span className={saveStatus === "error" ? "text-red-500" : ""}>
           {formatSaveStatus(saveStatus, errorMessage)}
         </span>
-        <button onClick={onOpenHistory} className="hover:text-gray-600" title="历史版本">
+        <button type="button" onClick={onOpenHistory} className="hover:text-gray-600" title="历史版本" aria-label="打开历史版本">
           v{note.version}
         </button>
       </div>

@@ -1,3 +1,4 @@
+import { useCallback, useState } from "react";
 import { Search, Pin, PinOff, X, Copy, Clipboard } from "lucide-react";
 import type { ClipboardItem } from "@contracts";
 import { formatRelativeTime } from "../utils/format";
@@ -8,7 +9,7 @@ interface ClipboardPanelProps {
   copiedId: string | null;
   error: string | null;
   onQueryChange: (query: string) => void;
-  onCapture: () => void;
+  onCapture: () => void | Promise<unknown>;
   onCopy: (id: string) => void;
   onDelete: (id: string) => void;
   /** Desktop-only: toggle pin on clipboard items. */
@@ -38,13 +39,29 @@ export function ClipboardPanel({
   onAutoCaptureChange,
   description = "跨设备共享的剪贴板历史",
 }: ClipboardPanelProps) {
+  const [capturing, setCapturing] = useState(false);
+  const [captureMessage, setCaptureMessage] = useState<string | null>(null);
+
+  const handleCapture = useCallback(async () => {
+    if (capturing) return;
+    setCapturing(true);
+    setCaptureMessage(null);
+    try {
+      const result = await onCapture();
+      setCaptureMessage(result === null ? "没有新的剪贴板内容" : "已读取剪贴板");
+      window.setTimeout(() => setCaptureMessage(null), 1_500);
+    } finally {
+      setCapturing(false);
+    }
+  }, [capturing, onCapture]);
+
   return (
-    <div className="flex h-full flex-col bg-[#f7f7f9]">
-      <header className="border-b border-gray-200/80 bg-white/90 px-6 py-5 backdrop-blur">
-        <div className="mx-auto flex max-w-6xl flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+    <div className="clipboard-panel">
+      <header className="clipboard-panel__header">
+        <div className="clipboard-panel__shell clipboard-panel__topbar">
           <div>
-            <h2 className="text-xl font-semibold tracking-tight text-gray-900">剪贴板</h2>
-            <p className="mt-1 text-xs text-gray-500">
+            <h2 className="clipboard-panel__title">剪贴板</h2>
+            <p className="clipboard-panel__description">
               {autoCaptureSupported !== undefined
                 ? autoCaptureSupported
                   ? autoCaptureEnabled
@@ -54,51 +71,60 @@ export function ClipboardPanel({
                 : description}
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="clipboard-panel__actions">
             {autoCaptureSupported && onAutoCaptureChange && (
               <button
+                type="button"
                 onClick={() => onAutoCaptureChange(!autoCaptureEnabled)}
-                className="rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-600 hover:bg-gray-50"
+                className="focus-ring clipboard-panel__secondary-button"
               >
                 {autoCaptureEnabled ? "暂停自动采集" : "开启自动采集"}
               </button>
             )}
             <button
-              onClick={onCapture}
-              className="rounded-xl bg-gray-900 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-black"
+              type="button"
+              onClick={() => void handleCapture()}
+              disabled={capturing}
+              className="focus-ring clipboard-panel__primary-button"
             >
-              读取当前剪贴板
+              {capturing ? "读取中..." : "读取当前剪贴板"}
             </button>
           </div>
         </div>
-        <div className="mx-auto mt-4 max-w-6xl">
-          <div className="relative max-w-xl">
-            <Search className="pointer-events-none absolute inset-y-0 left-3 my-auto h-4 w-4 text-gray-400" />
+        <div className="clipboard-panel__shell clipboard-panel__search-row">
+          <label className="clipboard-panel__search">
+            <Search className="clipboard-panel__search-icon" />
             <input
+              type="search"
+              aria-label="搜索剪贴板历史"
               value={query}
               onChange={(event) => onQueryChange(event.target.value)}
               placeholder="搜索剪贴板历史"
-              className="w-full rounded-xl border border-gray-200 bg-gray-50 py-2.5 pl-9 pr-4 text-sm outline-none transition focus:border-gray-400 focus:bg-white"
+              className="clipboard-panel__search-input"
             />
-          </div>
-          {error && <p className="mt-2 text-xs text-red-600">{error}</p>}
+          </label>
+          {(error || captureMessage) && (
+            <p className={`mt-2 text-xs ${error ? "text-red-600" : "text-emerald-600"}`}>
+              {error ?? captureMessage}
+            </p>
+          )}
         </div>
       </header>
 
-      <main className="flex-1 overflow-y-auto px-6 py-6">
-        <div className="mx-auto max-w-6xl">
+      <main className="clipboard-panel__body">
+        <div className="clipboard-panel__shell">
           {items.length === 0 ? (
-            <div className="flex min-h-72 flex-col items-center justify-center rounded-3xl border border-dashed border-gray-300 bg-white text-center">
-              <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-violet-100 text-violet-700">
+            <div className="clipboard-panel__empty">
+              <div className="clipboard-panel__empty-icon">
                 <Clipboard className="h-7 w-7" />
               </div>
-              <h3 className="text-sm font-semibold text-gray-700">暂无剪贴板记录</h3>
-              <p className="mt-1 max-w-sm text-xs leading-5 text-gray-400">
+              <h3 className="clipboard-panel__empty-title">暂无剪贴板记录</h3>
+              <p className="clipboard-panel__empty-text">
                 复制文本、链接或代码片段后，它们会安全地保存。
               </p>
             </div>
           ) : (
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+            <div className="clipboard-panel__grid">
               {items.map((item) => (
                 <ClipboardCard
                   key={item.id}
@@ -139,15 +165,17 @@ function ClipboardCard({
   const label = item.kind === "link" ? "链接" : item.kind === "code" ? "代码" : "文本";
 
   return (
-    <article className="group flex min-h-36 flex-col rounded-xl border border-gray-200/80 bg-white p-3 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
-      <div className="flex items-center justify-between gap-2">
+    <article className="clipboard-card group">
+      <div className="clipboard-card__header">
         <span className={`rounded-md px-2 py-0.5 text-[11px] font-medium ${palette}`}>{label}</span>
-        <div className="flex items-center gap-0.5 opacity-60 transition group-hover:opacity-100">
+        <div className="clipboard-card__actions">
           {onTogglePin && (
             <button
+              type="button"
               onClick={onTogglePin}
-              className={`rounded p-1 hover:bg-gray-100 ${item.is_pinned ? "text-amber-500" : "text-gray-400"}`}
+              className={`focus-ring rounded p-1 hover:bg-gray-100 ${item.is_pinned ? "text-amber-500" : "text-gray-400"}`}
               title={item.is_pinned ? "取消固定" : "固定"}
+              aria-label={item.is_pinned ? "取消固定" : "固定"}
             >
               {item.is_pinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
             </button>
@@ -156,22 +184,24 @@ function ClipboardCard({
             <Pin className="h-3.5 w-3.5 text-amber-500" />
           )}
           <button
+            type="button"
             onClick={onDelete}
-            className="rounded p-1 text-gray-400 hover:bg-red-50 hover:text-red-500"
+            className="focus-ring rounded p-1 text-gray-400 hover:bg-red-50 hover:text-red-500"
             title="删除"
+            aria-label="删除剪贴板记录"
           >
             <X className="h-3.5 w-3.5" />
           </button>
         </div>
       </div>
-      <button onClick={onCopy} className="mt-2 min-h-16 flex-1 text-left" title="复制到剪贴板">
+      <button type="button" onClick={onCopy} className="focus-ring clipboard-card__copy" title="复制到剪贴板">
         <p
           className={`line-clamp-4 whitespace-pre-wrap break-words text-[13px] leading-5 text-gray-700 ${item.kind === "code" ? "font-mono" : ""}`}
         >
           {item.content}
         </p>
       </button>
-      <div className="mt-2 flex items-center justify-between border-t border-gray-100 pt-2 text-[11px] text-gray-400">
+      <div className="clipboard-card__meta">
         <span>
           {formatRelativeTime(item.last_copied_at)} · {shortDevice(item.source_device)}
         </span>

@@ -86,6 +86,7 @@ export function LoginPage({ onLogin, onRegister, error, loading }: LoginPageProp
         <p className="mt-4 text-center text-sm text-gray-500">
           {mode === "login" ? "还没有账户？" : "已有账户？"}
           <button
+            type="button"
             onClick={() => setMode(mode === "login" ? "register" : "login")}
             className="ml-1 font-medium text-blue-600 hover:text-blue-700"
           >

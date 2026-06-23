@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { invoke } from "@/utils/tauri";
+import { hideCurrentWindow } from "@/utils/window";
 import { FileEdit, X } from "lucide-react";
 
 export function QuickNotePopup() {
@@ -16,18 +17,21 @@ export function QuickNotePopup() {
   // Hide window on blur
   useEffect(() => {
     let destroyed = false;
+    let unlisten: (() => void) | undefined;
     (async () => {
       try {
         const { getCurrentWindow } = await import("@tauri-apps/api/window");
         const win = getCurrentWindow();
-        const unlisten = await win.onFocusChanged(({ payload: focused }) => {
+        unlisten = await win.onFocusChanged(({ payload: focused }) => {
           if (!focused && !destroyed) void win.hide();
         });
         if (destroyed) unlisten();
-        else return () => { destroyed = true; unlisten(); };
       } catch { /* not in tauri */ }
     })();
-    return () => { destroyed = true; };
+    return () => {
+      destroyed = true;
+      unlisten?.();
+    };
   }, []);
 
   const saveAndClose = useCallback(async () => {
@@ -44,8 +48,7 @@ export function QuickNotePopup() {
       await invoke("create_note", { content: html });
       setContent("");
       try {
-        const { getCurrentWindow } = await import("@tauri-apps/api/window");
-        void getCurrentWindow().hide();
+        void hideCurrentWindow();
       } catch { /* noop */ }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -58,9 +61,7 @@ export function QuickNotePopup() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        import("@tauri-apps/api/window").then(({ getCurrentWindow }) => {
-          void getCurrentWindow().hide();
-        });
+        void hideCurrentWindow();
       } else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
         void saveAndClose();
@@ -78,12 +79,11 @@ export function QuickNotePopup() {
         <h2 className="text-sm font-semibold text-gray-800">快速便签</h2>
         <div className="flex-1" />
         <button
-          onClick={() => {
-            import("@tauri-apps/api/window").then(({ getCurrentWindow }) => {
-              void getCurrentWindow().hide();
-            });
-          }}
+          type="button"
+          onClick={() => void hideCurrentWindow()}
           className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+          title="关闭"
+          aria-label="关闭"
         >
           <X className="h-4 w-4" />
         </button>
@@ -110,6 +110,7 @@ export function QuickNotePopup() {
           )}
         </div>
         <button
+          type="button"
           onClick={() => void saveAndClose()}
           disabled={!content.trim() || saving}
           className="rounded-lg bg-violet-600 px-4 py-1.5 text-xs font-medium text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-50"
