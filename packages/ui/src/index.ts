@@ -8,6 +8,8 @@ export { NoteCard, NoteSectionLabel } from "./components/NoteCard";
 export type { NoteCardProps } from "./components/NoteCard";
 export { TrashPanel } from "./components/TrashPanel";
 export { HistoryPanel } from "./components/HistoryPanel";
+export { Sidebar } from "./components/Sidebar";
+export type { SidebarProps, SidebarSyncStatus } from "./components/Sidebar";
 
 // Utility functions
 export { compressImageToDataUrl } from "./utils/image";
