@@ -22,10 +22,23 @@ export async function invoke<T>(cmd: string, args?: InvokeArgs): Promise<T> {
     throw new Error(msg);
   }
 
-  return tauriInvoke<T>(cmd, args ?? {});
+  try {
+    return await tauriInvoke<T>(cmd, args ?? {});
+  } catch (error) {
+    if (isStateNotManagedError(error)) {
+      await new Promise((resolve) => window.setTimeout(resolve, 150));
+      return await tauriInvoke<T>(cmd, args ?? {});
+    }
+    throw error;
+  }
 }
 
 export function convertFileSrc(filePath: string): string {
   if (!isTauri()) return filePath;
   return tauriConvertFileSrc(filePath);
+}
+
+function isStateNotManagedError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("state not managed") && message.includes("You must call `.manage()`");
 }

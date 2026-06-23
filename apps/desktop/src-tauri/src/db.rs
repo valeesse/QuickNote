@@ -56,6 +56,7 @@ impl Database {
                 plain_text TEXT NOT NULL DEFAULT '',
                 preview TEXT NOT NULL DEFAULT '',
                 is_pinned INTEGER NOT NULL DEFAULT 0,
+                sort_order INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 version INTEGER NOT NULL DEFAULT 1,
@@ -66,6 +67,7 @@ impl Database {
 
         ensure_column(&conn, "notes", "plain_text", "TEXT NOT NULL DEFAULT ''")?;
         ensure_column(&conn, "notes", "preview", "TEXT NOT NULL DEFAULT ''")?;
+        ensure_column(&conn, "notes", "sort_order", "INTEGER NOT NULL DEFAULT 0")?;
 
         let schema_version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
         if schema_version < 2 {
@@ -200,7 +202,7 @@ impl Database {
         )?;
 
         conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_notes_pinned ON notes(is_pinned, updated_at DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_notes_pinned ON notes(is_pinned, sort_order ASC, updated_at DESC)",
             [],
         )?;
 
@@ -222,11 +224,16 @@ impl Database {
         let plain_text = html_to_text(content);
         let preview = make_preview_without_title(content);
         let tx = conn.transaction()?;
+        let sort_order = tx.query_row(
+            "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM notes WHERE is_deleted = 0 AND is_pinned = 0",
+            [],
+            |row| row.get::<_, i64>(0),
+        )?;
 
         tx.execute(
-            "INSERT INTO notes (id, title, content, plain_text, preview, is_pinned, created_at, updated_at, version, is_deleted)
-             VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7, 1, 0)",
-            params![id, title, content, plain_text, preview, now, now],
+            "INSERT INTO notes (id, title, content, plain_text, preview, is_pinned, sort_order, created_at, updated_at, version, is_deleted)
+             VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7, ?8, 1, 0)",
+            params![id, title, content, plain_text, preview, sort_order, now, now],
         )?;
         enqueue_change(&tx, "note", &id, "upsert", &now)?;
         tx.commit()?;
@@ -274,7 +281,7 @@ impl Database {
             "SELECT id, title, preview, is_pinned, created_at, updated_at
              FROM notes
              WHERE is_deleted = 0
-             ORDER BY is_pinned DESC, updated_at DESC",
+             ORDER BY is_pinned DESC, sort_order ASC, updated_at DESC",
         )?;
 
         let notes = stmt
@@ -401,10 +408,23 @@ impl Database {
         let mut conn = self.conn.lock().unwrap();
         let now = Utc::now().to_rfc3339();
         let tx = conn.transaction()?;
+        let is_pinned = tx
+            .query_row(
+                "SELECT is_pinned FROM notes WHERE id = ?1",
+                params![id],
+                |row| row.get::<_, bool>(0),
+            )
+            .optional()?
+            .unwrap_or(false);
+        let next_sort_order = tx.query_row(
+            "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM notes WHERE is_deleted = 0 AND is_pinned = ?1",
+            params![!is_pinned],
+            |row| row.get::<_, i64>(0),
+        )?;
 
         let rows = tx.execute(
-            "UPDATE notes SET is_pinned = NOT is_pinned, updated_at = ?1 WHERE id = ?2",
-            params![now, id],
+            "UPDATE notes SET is_pinned = NOT is_pinned, sort_order = ?1, updated_at = ?2 WHERE id = ?3",
+            params![next_sort_order, now, id],
         )?;
         if rows > 0 {
             enqueue_change(&tx, "note", id, "upsert", &now)?;
@@ -412,6 +432,25 @@ impl Database {
         tx.commit()?;
 
         Ok(rows > 0)
+    }
+
+    pub fn reorder_notes(&self, ids: &[String], is_pinned: bool) -> Result<()> {
+        let mut conn = self.conn.lock().unwrap();
+        let now = Utc::now().to_rfc3339();
+        let tx = conn.transaction()?;
+
+        for (index, id) in ids.iter().enumerate() {
+            let rows = tx.execute(
+                "UPDATE notes SET is_pinned = ?1, sort_order = ?2, updated_at = ?3 WHERE id = ?4 AND is_deleted = 0",
+                params![is_pinned, index as i64, now, id],
+            )?;
+            if rows > 0 {
+                enqueue_change(&tx, "note", id, "upsert", &now)?;
+            }
+        }
+
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn search_notes(&self, query: &str) -> Result<Vec<NoteSummary>> {

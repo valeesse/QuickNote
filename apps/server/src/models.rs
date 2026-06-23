@@ -43,6 +43,12 @@ pub struct UpdateNoteRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct ReorderNotesRequest {
+    pub ids: Vec<String>,
+    pub is_pinned: bool,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct CaptureClipboardRequest {
     pub content: String,
     pub kind: Option<String>,

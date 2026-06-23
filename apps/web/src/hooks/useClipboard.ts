@@ -67,6 +67,18 @@ export function useClipboard() {
     [loadItems],
   );
 
+  const togglePin = useCallback(
+    async (id: string) => {
+      try {
+        await clipboardApi.togglePin(id);
+        await loadItems();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [loadItems],
+  );
+
   useEffect(() => {
     const timer = setTimeout(() => void loadItems(), query ? 200 : 0);
     return () => clearTimeout(timer);
@@ -80,12 +92,20 @@ export function useClipboard() {
     error,
     capture,
     copyItem,
+    togglePin,
     deleteItem,
     loadItems,
   };
 }
 
 async function readClipboardPayload(): Promise<{ content: string; kind?: string }> {
+  if (!document.hasFocus()) {
+    throw new Error("请先点击页面后再读取剪贴板");
+  }
+  if (!navigator.clipboard) {
+    throw new Error("当前浏览器不支持读取剪贴板");
+  }
+
   if ("read" in navigator.clipboard) {
     try {
       const items = await navigator.clipboard.read();
@@ -112,8 +132,20 @@ async function readClipboardPayload(): Promise<{ content: string; kind?: string 
     }
   }
 
-  const text = await navigator.clipboard.readText();
-  return { content: text };
+  try {
+    const text = await navigator.clipboard.readText();
+    return { content: text };
+  } catch (error) {
+    if (isClipboardFocusError(error)) {
+      throw new Error("请先点击页面后再读取剪贴板");
+    }
+    throw error;
+  }
+}
+
+function isClipboardFocusError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("Document is not focused") || message.includes("document is not focused");
 }
 
 function blobToDataUrl(blob: Blob): Promise<string> {

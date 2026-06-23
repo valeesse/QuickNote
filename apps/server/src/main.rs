@@ -80,6 +80,7 @@ async fn main() {
             "/api/notes",
             get(routes::notes::list_notes).post(routes::notes::create_note),
         )
+        .route("/api/notes/reorder", post(routes::notes::reorder_notes))
         .route(
             "/api/notes/{id}",
             get(routes::notes::get_note)
@@ -98,6 +99,7 @@ async fn main() {
             "/api/clipboard/{id}",
             delete(routes::clipboard::delete_item),
         )
+        .route("/api/clipboard/{id}/pin", patch(routes::clipboard::toggle_pin))
         // Sync (protected)
         .route("/api/sync/pull", post(routes::sync::pull))
         .route("/api/sync/push", post(routes::sync::push))

@@ -120,6 +120,11 @@ export const notesApi = {
     apiFetch<boolean>(`/api/notes/${id}/restore`, { method: "POST" }),
   togglePin: (id: string) =>
     apiFetch<boolean>(`/api/notes/${id}/pin`, { method: "PATCH" }),
+  reorder: (ids: string[], isPinned: boolean) =>
+    apiFetch<boolean>("/api/notes/reorder", {
+      method: "POST",
+      body: JSON.stringify({ ids, is_pinned: isPinned }),
+    }),
   search: (q: string) =>
     apiFetch<import("@/types").NoteSummary[]>(
       `/api/notes/search?q=${encodeURIComponent(q)}`,
@@ -134,6 +139,8 @@ export const clipboardApi = {
       method: "POST",
       body: JSON.stringify({ content, kind, source_device: "web" }),
     }),
+  togglePin: (id: string) =>
+    apiFetch<boolean>(`/api/clipboard/${id}/pin`, { method: "PATCH" }),
   delete: (id: string) =>
     apiFetch<boolean>(`/api/clipboard/${id}`, { method: "DELETE" }),
 };

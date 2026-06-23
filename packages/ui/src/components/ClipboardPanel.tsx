@@ -1,5 +1,5 @@
-import { useCallback, useState } from "react";
-import { Search, Pin, PinOff, X, Copy, Clipboard } from "lucide-react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { Search, Pin, PinOff, Copy, Clipboard, Trash2 } from "lucide-react";
 import type { ClipboardItem } from "@contracts";
 import { formatRelativeTime } from "../utils/format";
 
@@ -22,6 +22,10 @@ interface ClipboardPanelProps {
   onAutoCaptureChange?: (enabled: boolean) => void;
   /** Description text shown under the header title. */
   description?: string;
+  /** Desktop-only: item that should be scrolled into view. */
+  focusedItemId?: string | null;
+  /** Desktop-only: create a note from this clipboard item. */
+  onCreateNoteFromItem?: (id: string) => void;
 }
 
 export function ClipboardPanel({
@@ -38,9 +42,12 @@ export function ClipboardPanel({
   autoCaptureEnabled,
   onAutoCaptureChange,
   description = "跨设备共享的剪贴板历史",
+  focusedItemId,
+  onCreateNoteFromItem,
 }: ClipboardPanelProps) {
   const [capturing, setCapturing] = useState(false);
   const [captureMessage, setCaptureMessage] = useState<string | null>(null);
+  const cardRefs = useRef(new Map<string, HTMLElement>());
 
   const handleCapture = useCallback(async () => {
     if (capturing) return;
@@ -54,6 +61,12 @@ export function ClipboardPanel({
       setCapturing(false);
     }
   }, [capturing, onCapture]);
+
+  useEffect(() => {
+    if (!focusedItemId) return;
+    const element = cardRefs.current.get(focusedItemId);
+    element?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [focusedItemId, items]);
 
   return (
     <div className="clipboard-panel">
@@ -128,11 +141,17 @@ export function ClipboardPanel({
               {items.map((item) => (
                 <ClipboardCard
                   key={item.id}
+                  ref={(element) => {
+                    if (element) cardRefs.current.set(item.id, element);
+                    else cardRefs.current.delete(item.id);
+                  }}
                   item={item}
+                  focused={focusedItemId === item.id}
                   copied={copiedId === item.id}
                   onCopy={() => onCopy(item.id)}
                   onTogglePin={onTogglePin ? () => onTogglePin(item.id) : undefined}
                   onDelete={() => onDelete(item.id)}
+                  onCreateNote={onCreateNoteFromItem ? () => onCreateNoteFromItem(item.id) : undefined}
                 />
               ))}
             </div>
@@ -143,19 +162,23 @@ export function ClipboardPanel({
   );
 }
 
-function ClipboardCard({
-  item,
-  copied,
-  onCopy,
-  onTogglePin,
-  onDelete,
-}: {
+const ClipboardCard = React.forwardRef<HTMLElement, {
   item: ClipboardItem;
+  focused: boolean;
   copied: boolean;
   onCopy: () => void;
   onTogglePin?: () => void;
   onDelete: () => void;
-}) {
+  onCreateNote?: () => void;
+}>(function ClipboardCard({
+  item,
+  focused,
+  copied,
+  onCopy,
+  onTogglePin,
+  onDelete,
+  onCreateNote,
+}, ref) {
   const palette =
     item.kind === "link"
       ? "bg-blue-50 text-blue-700"
@@ -177,7 +200,15 @@ function ClipboardCard({
   const isRich = item.kind === "rich" || item.kind === "image";
 
   return (
-    <article className="clipboard-card group">
+    <article
+      ref={ref}
+      className={`clipboard-card group ${focused ? "clipboard-card--focused" : ""}`}
+      onContextMenu={(event) => {
+        if (!onCreateNote) return;
+        event.preventDefault();
+        onCreateNote();
+      }}
+    >
       <div className="clipboard-card__header">
         <span className={`rounded-md px-2 py-0.5 text-[11px] font-medium ${palette}`}>{label}</span>
         <div className="clipboard-card__actions">
@@ -189,7 +220,7 @@ function ClipboardCard({
               title={item.is_pinned ? "取消固定" : "固定"}
               aria-label={item.is_pinned ? "取消固定" : "固定"}
             >
-              {item.is_pinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
+              {item.is_pinned ? <Pin className="h-3.5 w-3.5" /> : <PinOff className="h-3.5 w-3.5" />}
             </button>
           )}
           {!onTogglePin && item.is_pinned && (
@@ -202,7 +233,7 @@ function ClipboardCard({
             title="删除"
             aria-label="删除剪贴板记录"
           >
-            <X className="h-3.5 w-3.5" />
+            <Trash2 className="h-3.5 w-3.5" />
           </button>
         </div>
       </div>
@@ -237,7 +268,7 @@ function ClipboardCard({
       </div>
     </article>
   );
-}
+});
 
 function shortDevice(device: string): string {
   return device ? `设备 ${device.slice(0, 6)}` : "本机";

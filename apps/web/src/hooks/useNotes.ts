@@ -69,16 +69,36 @@ export function useNotes() {
     return ok;
   }, []);
 
-  const createNote = useCallback(async () => {
+  const createNote = useCallback(async (content = "") => {
     if (activeNoteIdRef.current && !(await flushSave(activeNoteIdRef.current))) return;
     try {
-      const note = await notesApi.create("");
+      const note = await notesApi.create(content);
       activeNoteIdRef.current = note.id;
       setActiveNote(note);
       await loadNotes();
       return note;
     } catch (error) { setErrorMessage(messageOf(error)); }
   }, [flushSave, loadNotes]);
+
+  const reorderNotes = useCallback(async (orderedIds: string[], isPinned: boolean) => {
+    const order = new Map(orderedIds.map((id, index) => [id, index]));
+    setNotes((current) =>
+      current.map((note) =>
+        order.has(note.id) ? { ...note, is_pinned: isPinned } : note
+      ).sort((a, b) => {
+        const pinnedDelta = Number(b.is_pinned) - Number(a.is_pinned);
+        if (pinnedDelta !== 0) return pinnedDelta;
+        return (order.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (order.get(b.id) ?? Number.MAX_SAFE_INTEGER);
+      })
+    );
+    try {
+      await notesApi.reorder(orderedIds, isPinned);
+      await loadNotes();
+    } catch (error) {
+      setErrorMessage(messageOf(error));
+      await loadNotes();
+    }
+  }, [loadNotes]);
 
   const selectNote = useCallback(async (id: string) => {
     if (id === activeNoteIdRef.current) return;
@@ -160,7 +180,7 @@ export function useNotes() {
     };
   }, [flushSave]);
 
-  return { notes, activeNote, isLoading, saveStatus, errorMessage, searchQuery, setSearchQuery, createNote, selectNote, updateNote, deleteNote, togglePin, loadNotes, restoreNote };
+  return { notes, activeNote, isLoading, saveStatus, errorMessage, searchQuery, setSearchQuery, createNote, selectNote, updateNote, deleteNote, togglePin, reorderNotes, loadNotes, restoreNote };
 }
 
 function messageOf(error: unknown): string { return error instanceof Error ? error.message : String(error); }

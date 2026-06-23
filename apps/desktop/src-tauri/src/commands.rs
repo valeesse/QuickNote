@@ -76,6 +76,15 @@ pub fn toggle_pin(db: State<'_, Arc<Database>>, id: String) -> Result<bool, Stri
 }
 
 #[tauri::command]
+pub fn reorder_notes(
+    db: State<'_, Arc<Database>>,
+    ids: Vec<String>,
+    is_pinned: bool,
+) -> Result<(), String> {
+    db.reorder_notes(&ids, is_pinned).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn search_notes(db: State<'_, Arc<Database>>, query: String) -> Result<Vec<NoteSummary>, String> {
     db.search_notes(&query).map_err(|e| e.to_string())
 }

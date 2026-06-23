@@ -206,11 +206,11 @@ export function useNotes() {
       .catch((err) => setErrorMessage(`草稿恢复失败：${getErrorMessage(err)}`));
   }, [flushAllDrafts, loadNotes]);
 
-  const createNote = useCallback(async () => {
+  const createNote = useCallback(async (content = "") => {
     try {
       if (!(await flushAllDrafts())) return;
       setErrorMessage(null);
-      const note = await invoke<Note>("create_note", { content: "" });
+      const note = await invoke<Note>("create_note", { content });
       activeNoteIdRef.current = note.id;
       setActiveNote(note);
       await loadNotes();
@@ -220,6 +220,31 @@ export function useNotes() {
       setErrorMessage(getErrorMessage(err));
     }
   }, [flushAllDrafts, loadNotes]);
+
+  const reorderNotes = useCallback(
+    async (orderedIds: string[], isPinned: boolean) => {
+      const order = new Map(orderedIds.map((id, index) => [id, index]));
+      setNotes((current) =>
+        current.map((note) =>
+          order.has(note.id) ? { ...note, is_pinned: isPinned } : note
+        ).sort((a, b) => {
+          const pinnedDelta = Number(b.is_pinned) - Number(a.is_pinned);
+          if (pinnedDelta !== 0) return pinnedDelta;
+          return (order.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (order.get(b.id) ?? Number.MAX_SAFE_INTEGER);
+        })
+      );
+
+      try {
+        await invoke("reorder_notes", { ids: orderedIds, isPinned });
+        await loadNotes();
+      } catch (err) {
+        console.error("Failed to reorder notes:", err);
+        setErrorMessage(getErrorMessage(err));
+        await loadNotes();
+      }
+    },
+    [loadNotes]
+  );
 
   const selectNote = useCallback(
     async (id: string) => {
@@ -523,6 +548,7 @@ export function useNotes() {
     updateNote,
     deleteNote,
     togglePin,
+    reorderNotes,
     loadNotes,
     loadDeletedNotes,
     restoreNote,

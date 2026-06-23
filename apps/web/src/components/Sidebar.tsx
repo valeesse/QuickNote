@@ -1,18 +1,19 @@
-import { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Plus,
   Search,
   X,
   Trash2,
-  Star,
   FileText,
   Clipboard,
+  Pin,
+  PinOff,
+  StickyNote,
   LogOut,
 } from "lucide-react";
 import type { AppView, ClipboardItem, NoteSummary } from "@/types";
-import { NoteCard, NoteSectionLabel } from "@ui/components/NoteCard";
 import { formatRelativeTime } from "@ui/utils/format";
-import { stripHtml } from "@ui/utils/html";
+import { stripHtml, stripMarkdown } from "@ui/utils/html";
 
 interface SidebarProps {
   viewMode: AppView;
@@ -27,9 +28,20 @@ interface SidebarProps {
   onCreateNote: () => void;
   onDeleteNote: (id: string) => void;
   onTogglePin: (id: string) => void;
+  onReorderNotes: (orderedIds: string[], isPinned: boolean) => void;
+  onSelectClipboardItem: (id: string) => void;
+  onCreateNoteFromClipboard: (id: string) => void;
   userEmail: string;
   onLogout: () => void;
 }
+
+type ClipboardContextMenu = {
+  itemId: string;
+  x: number;
+  y: number;
+};
+
+type DropPlacement = "before" | "after";
 
 export function Sidebar({
   viewMode,
@@ -44,17 +56,39 @@ export function Sidebar({
   onCreateNote,
   onDeleteNote,
   onTogglePin,
+  onReorderNotes,
+  onSelectClipboardItem,
+  onCreateNoteFromClipboard,
   userEmail,
   onLogout,
 }: SidebarProps) {
-  const [contextMenu, setContextMenu] = useState<{
-    noteId: string;
-    x: number;
-    y: number;
-  } | null>(null);
+  const [dragReadyId, setDragReadyId] = useState<string | null>(null);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [dragTarget, setDragTarget] = useState<{ id: string; placement: DropPlacement } | null>(null);
+  const [dragPosition, setDragPosition] = useState<{ x: number; y: number } | null>(null);
+  const [clipboardContextMenu, setClipboardContextMenu] = useState<ClipboardContextMenu | null>(null);
+  const longPressTimerRef = useRef<number | null>(null);
+  const pointerDragRef = useRef<{ noteId: string; pointerId: number } | null>(null);
+  const dragTargetRef = useRef<{ id: string; placement: DropPlacement } | null>(null);
+  const suppressClickRef = useRef(false);
 
-  const pinnedNotes = useMemo(() => notes.filter((n) => n.is_pinned), [notes]);
-  const unpinnedNotes = useMemo(() => notes.filter((n) => !n.is_pinned), [notes]);
+  const closeMenus = useCallback(() => setClipboardContextMenu(null), []);
+
+  useEffect(() => {
+    if (!clipboardContextMenu) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeMenus();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [closeMenus, clipboardContextMenu]);
+
+  useEffect(() => {
+    return () => clearLongPressTimer(longPressTimerRef);
+  }, []);
+
+  const pinnedNotes = useMemo(() => notes.filter((note) => note.is_pinned), [notes]);
+  const unpinnedNotes = useMemo(() => notes.filter((note) => !note.is_pinned), [notes]);
   const pinnedClipboardItems = useMemo(
     () => clipboardItems.filter((item) => item.is_pinned).slice(0, 4),
     [clipboardItems],
@@ -64,28 +98,134 @@ export function Sidebar({
     [clipboardItems],
   );
 
-  const handleContextMenu = (e: React.MouseEvent, noteId: string) => {
-    e.preventDefault();
-    setContextMenu({ noteId, ...getMenuPosition(e.clientX, e.clientY) });
+  const startLongPress = (noteId: string, pointerId: number) => {
+    clearLongPressTimer(longPressTimerRef);
+    pointerDragRef.current = { noteId, pointerId };
+    longPressTimerRef.current = window.setTimeout(() => {
+      setDragReadyId(noteId);
+      setDraggingId(noteId);
+      suppressClickRef.current = true;
+    }, 260);
   };
 
-  const closeContextMenu = () => setContextMenu(null);
+  const resetLongPress = () => {
+    clearLongPressTimer(longPressTimerRef);
+    pointerDragRef.current = null;
+    dragTargetRef.current = null;
+    setDragTarget(null);
+    setDragPosition(null);
+    if (!draggingId) setDragReadyId(null);
+  };
 
-  useEffect(() => {
-    if (!contextMenu) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") closeContextMenu();
+  const finishPointerDrag = (targetId: string | null) => {
+    const sourceId = pointerDragRef.current?.noteId;
+    const targetGroup = dragPosition
+      ? document.elementFromPoint(dragPosition.x, dragPosition.y)?.closest<HTMLElement>("[data-note-group]")
+      : null;
+    const groupPinned =
+      targetGroup?.dataset.noteGroup === "pinned"
+        ? true
+        : targetGroup?.dataset.noteGroup === "all"
+          ? false
+          : null;
+    const activeDragTarget = dragTargetRef.current;
+    const fallbackTargetId =
+      groupPinned === true
+        ? pinnedNotes[pinnedNotes.length - 1]?.id ?? null
+        : groupPinned === false
+          ? unpinnedNotes[unpinnedNotes.length - 1]?.id ?? null
+          : null;
+    const effectiveTargetId = targetId ?? activeDragTarget?.id ?? fallbackTargetId;
+    const placement = activeDragTarget?.id === effectiveTargetId ? activeDragTarget.placement : "before";
+    pointerDragRef.current = null;
+    clearLongPressTimer(longPressTimerRef);
+    setDraggingId(null);
+    setDragReadyId(null);
+    dragTargetRef.current = null;
+    setDragTarget(null);
+    setDragPosition(null);
+    if (sourceId && dragReadyId) {
+      suppressClickRef.current = true;
+      window.setTimeout(() => {
+        suppressClickRef.current = false;
+      }, 0);
+    }
+    if (sourceId && !effectiveTargetId && groupPinned !== null) {
+      onReorderNotes([sourceId], groupPinned);
+      return;
+    }
+    if (!sourceId || !effectiveTargetId) return;
+    handleDropNote(sourceId, effectiveTargetId, placement, groupPinned);
+  };
+
+  const updateDragTarget = (clientX: number, clientY: number) => {
+    const sourceId = pointerDragRef.current?.noteId;
+    if (!sourceId || !dragReadyId) return;
+    setDragPosition({ x: clientX, y: clientY });
+    const target = document
+      .elementFromPoint(clientX, clientY)
+      ?.closest<HTMLElement>("[data-note-id]");
+    const targetId = target?.dataset.noteId;
+    if (!targetId || targetId === sourceId) {
+      dragTargetRef.current = null;
+      setDragTarget(null);
+      return;
+    }
+    const sourceNote = notes.find((note) => note.id === sourceId);
+    const targetNote = notes.find((note) => note.id === targetId);
+    if (!sourceNote || !targetNote) {
+      dragTargetRef.current = null;
+      setDragTarget(null);
+      return;
+    }
+    const rect = target.getBoundingClientRect();
+    const nextTarget: { id: string; placement: DropPlacement } = {
+      id: targetId,
+      placement: clientY < rect.top + rect.height / 2 ? "before" : "after",
     };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [contextMenu]);
+    if (
+      dragTargetRef.current?.id === nextTarget.id &&
+      dragTargetRef.current?.placement === nextTarget.placement
+    ) {
+      return;
+    }
+    dragTargetRef.current = nextTarget;
+    setDragTarget(nextTarget);
+  };
+
+  const handleDropNote = (
+    sourceId: string,
+    targetId: string,
+    placement: DropPlacement,
+    targetPinnedOverride: boolean | null = null,
+  ) => {
+    if (sourceId === targetId) return;
+    const targetNote = notes.find((note) => note.id === targetId);
+    const sourceNote = notes.find((note) => note.id === sourceId);
+    if (!targetNote || !sourceNote) return;
+    const targetPinned = targetPinnedOverride ?? targetNote.is_pinned;
+    const group = targetPinned ? pinnedNotes : unpinnedNotes;
+    const dragged = { ...sourceNote, is_pinned: targetPinned };
+
+    const next = group.filter((note) => note.id !== sourceId);
+    const targetIndex = next.findIndex((note) => note.id === targetId);
+    const insertIndex = targetIndex + (placement === "after" ? 1 : 0);
+    next.splice(Math.max(insertIndex, 0), 0, dragged);
+    onReorderNotes(next.map((note) => note.id), targetPinned);
+  };
+
+  const selectNote = (id: string) => {
+    if (suppressClickRef.current) return;
+    onSelectNote(id);
+  };
+
+  const floatingNote = draggingId ? notes.find((note) => note.id === draggingId) : null;
 
   return (
     <div
       className="hidden h-full w-72 flex-col border-r border-gray-200 bg-white md:flex"
-      onClick={closeContextMenu}
+      onClick={closeMenus}
     >
-      {/* Header */}
       <div className="border-b border-gray-100 p-4">
         <div className="mb-3 flex items-center justify-between">
           <h1 className="text-lg font-bold text-gray-800">QuickNote</h1>
@@ -103,22 +243,8 @@ export function Sidebar({
         </div>
 
         <div className="mb-3 grid grid-cols-2 rounded-xl bg-gray-100 p-1 text-xs font-medium">
-          <button
-            type="button"
-            onClick={() => onViewModeChange("notes")}
-            className={`focus-ring rounded-lg px-3 py-2 transition ${viewMode === "notes" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
-            aria-pressed={viewMode === "notes"}
-          >
-            便签
-          </button>
-          <button
-            type="button"
-            onClick={() => onViewModeChange("clipboard")}
-            className={`focus-ring rounded-lg px-3 py-2 transition ${viewMode === "clipboard" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
-            aria-pressed={viewMode === "clipboard"}
-          >
-            剪贴板
-          </button>
+          <button type="button" onClick={() => onViewModeChange("notes")} aria-pressed={viewMode === "notes"} className={`focus-ring rounded-lg px-3 py-2 transition ${viewMode === "notes" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>便签</button>
+          <button type="button" onClick={() => onViewModeChange("clipboard")} aria-pressed={viewMode === "clipboard"} className={`focus-ring rounded-lg px-3 py-2 transition ${viewMode === "clipboard" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>剪贴板</button>
         </div>
 
         {viewMode === "notes" && (
@@ -128,7 +254,7 @@ export function Sidebar({
               type="text"
               placeholder="搜索便签..."
               value={searchQuery}
-              onChange={(e) => onSearchChange(e.target.value)}
+              onChange={(event) => onSearchChange(event.target.value)}
               className="w-full rounded-lg border border-gray-200 bg-gray-50 py-2 pl-9 pr-3 text-sm placeholder-gray-400 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
             />
             {searchQuery && (
@@ -145,73 +271,81 @@ export function Sidebar({
         )}
       </div>
 
-      {/* Note List */}
       {viewMode === "notes" ? (
-        <div className="flex-1 overflow-y-auto">
+        <div className="note-sidebar">
           {notes.length === 0 ? (
-            <div className="flex h-full flex-col items-center justify-center p-6 text-gray-400">
-              <FileText className="mb-3 h-12 w-12 opacity-50" />
-              <p className="text-center text-sm">
-                {searchQuery ? "没有找到匹配的便签" : "还没有便签"}
-              </p>
-              {!searchQuery && (
-                <button
-                  type="button"
-                  onClick={onCreateNote}
-                  className="focus-ring mt-3 rounded px-2 py-1 text-sm font-medium text-blue-600 hover:text-blue-700"
-                >
-                  创建第一个便签
-                </button>
-              )}
+            <div className="clipboard-sidebar__empty">
+              <div>
+                <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-100 text-blue-700">
+                  <FileText className="h-7 w-7" />
+                </div>
+                <h3 className="mt-4 text-sm font-semibold text-gray-700">
+                  {searchQuery ? "没有找到匹配的便签" : "还没有便签"}
+                </h3>
+                {!searchQuery && (
+                  <button type="button" onClick={onCreateNote} className="mt-3 text-sm font-medium text-blue-600 hover:text-blue-700">
+                    创建第一个便签
+                  </button>
+                )}
+              </div>
             </div>
           ) : (
             <>
-              {pinnedNotes.length > 0 && (
-                <>
-                  <NoteSectionLabel
-                    icon={<Star className="mr-1.5 h-3 w-3 text-gray-400" fill="currentColor" />}
-                  >
-                    已置顶
-                  </NoteSectionLabel>
+              {(pinnedNotes.length > 0 || draggingId) && (
+                <NoteSidebarSection title="固定" group="pinned">
                   {pinnedNotes.map((note) => (
-                    <NoteCard
+                    <NoteSidebarItem
                       key={note.id}
-                      id={note.id}
-                      title={note.title}
-                      preview={stripHtml(note.preview).slice(0, 80)}
-                      updatedAt={note.updated_at}
-                      isPinned={note.is_pinned}
-                      isActive={note.id === activeNoteId}
-                      onSelect={onSelectNote}
-                      onContextMenu={handleContextMenu}
+                      note={note}
+                      active={note.id === activeNoteId}
+                      dragging={note.id === draggingId}
+                      dragReady={note.id === dragReadyId}
+                      dropPlacement={dragTarget?.id === note.id ? dragTarget.placement : null}
+                      onSelect={selectNote}
+                      onDelete={onDeleteNote}
+                      onTogglePin={onTogglePin}
+                      onPointerDown={startLongPress}
+                      onPointerUp={finishPointerDrag}
+                      onPointerLeave={resetLongPress}
+                      onPointerMove={updateDragTarget}
                     />
                   ))}
-                </>
+                </NoteSidebarSection>
               )}
-              {pinnedNotes.length > 0 && unpinnedNotes.length > 0 && (
-                <NoteSectionLabel>全部便签</NoteSectionLabel>
-              )}
-              {unpinnedNotes.map((note) => (
-                <NoteCard
-                  key={note.id}
-                  id={note.id}
-                  title={note.title}
-                  preview={stripHtml(note.preview).slice(0, 80)}
-                  updatedAt={note.updated_at}
-                  isPinned={note.is_pinned}
-                  isActive={note.id === activeNoteId}
-                  onSelect={onSelectNote}
-                  onContextMenu={handleContextMenu}
-                />
-              ))}
+              <NoteSidebarSection title="全部" group="all">
+                {unpinnedNotes.map((note) => (
+                  <NoteSidebarItem
+                    key={note.id}
+                    note={note}
+                    active={note.id === activeNoteId}
+                    dragging={note.id === draggingId}
+                    dragReady={note.id === dragReadyId}
+                    dropPlacement={dragTarget?.id === note.id ? dragTarget.placement : null}
+                    onSelect={selectNote}
+                    onDelete={onDeleteNote}
+                    onTogglePin={onTogglePin}
+                    onPointerDown={startLongPress}
+                    onPointerUp={finishPointerDrag}
+                    onPointerLeave={resetLongPress}
+                    onPointerMove={updateDragTarget}
+                  />
+                ))}
+              </NoteSidebarSection>
             </>
           )}
         </div>
       ) : (
-        <ClipboardSidebar items={recentClipboardItems} pinnedItems={pinnedClipboardItems} />
+        <ClipboardSidebar
+          items={recentClipboardItems}
+          pinnedItems={pinnedClipboardItems}
+          onSelect={onSelectClipboardItem}
+          onContextMenu={(event, itemId) => {
+            event.preventDefault();
+            setClipboardContextMenu({ itemId, ...getMenuPosition(event.clientX, event.clientY) });
+          }}
+        />
       )}
 
-      {/* Footer */}
       <div className="flex items-center justify-between border-t border-gray-100 px-4 py-2">
         <p className="flex-1 text-center text-xs text-gray-400">
           {viewMode === "notes" ? `${notes.length} 条便签` : `${clipboardCount} 条记录`}
@@ -227,50 +361,170 @@ export function Sidebar({
         </button>
       </div>
 
-      {/* Context Menu */}
-      {contextMenu && (
+      {clipboardContextMenu && (
         <div
           role="menu"
-          aria-label="便签操作"
-          className="animate-menu-in fixed z-50 min-w-[140px] rounded-lg border border-gray-200 bg-white py-1 shadow-lg"
-          style={{ left: contextMenu.x, top: contextMenu.y }}
+          aria-label="剪贴板操作"
+          className="animate-menu-in fixed z-50 min-w-[170px] rounded-lg border border-gray-200 bg-white py-1 shadow-lg"
+          style={{ left: clipboardContextMenu.x, top: clipboardContextMenu.y }}
           onClick={(event) => event.stopPropagation()}
         >
           <button
             type="button"
             role="menuitem"
             onClick={() => {
-              onTogglePin(contextMenu.noteId);
-              closeContextMenu();
+              onCreateNoteFromClipboard(clipboardContextMenu.itemId);
+              closeMenus();
             }}
             className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-gray-50"
           >
-            <Star className="h-4 w-4" />
-            置顶 / 取消置顶
+            <StickyNote className="h-4 w-4" />
+            从剪贴板创建便签
           </button>
-          <hr className="my-1 border-gray-100" />
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => {
-              onDeleteNote(contextMenu.noteId);
-              closeContextMenu();
-            }}
-            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
-          >
-            <Trash2 className="h-4 w-4" />
-            删除
-          </button>
+        </div>
+      )}
+
+      {floatingNote && dragPosition && (
+        <div
+          className="note-sidebar__drag-preview"
+          style={{ left: dragPosition.x, top: dragPosition.y }}
+        >
+          <span className="note-sidebar__item-title">
+            <span className="min-w-0 truncate">{floatingNote.title || "无标题"}</span>
+          </span>
+          <span className="note-sidebar__item-text">{stripMarkdown(floatingNote.preview) || "空便签"}</span>
         </div>
       )}
     </div>
   );
 }
 
+function NoteSidebarSection({
+  title,
+  group,
+  children,
+}: {
+  title: string;
+  group: "pinned" | "all";
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="clipboard-sidebar__section" data-note-group={group}>
+      <h3 className="clipboard-sidebar__title">{title}</h3>
+      {children}
+    </section>
+  );
+}
+
+function NoteSidebarItem({
+  note,
+  active,
+  dragging,
+  dragReady,
+  dropPlacement,
+  onSelect,
+  onDelete,
+  onTogglePin,
+  onPointerDown,
+  onPointerUp,
+  onPointerLeave,
+  onPointerMove,
+}: {
+  note: NoteSummary;
+  active: boolean;
+  dragging: boolean;
+  dragReady: boolean;
+  dropPlacement: DropPlacement | null;
+  onSelect: (id: string) => void;
+  onDelete: (id: string) => void;
+  onTogglePin: (id: string) => void;
+  onPointerDown: (id: string, pointerId: number) => void;
+  onPointerUp: (targetId: string | null) => void;
+  onPointerLeave: () => void;
+  onPointerMove: (clientX: number, clientY: number) => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        if (!dragReady && !dragging) onSelect(note.id);
+      }}
+      data-note-id={note.id}
+      onPointerDown={(event) => {
+        if (event.button !== 0) return;
+        event.currentTarget.setPointerCapture(event.pointerId);
+        onPointerDown(note.id, event.pointerId);
+      }}
+      onPointerUp={(event) => {
+        const target = document
+          .elementFromPoint(event.clientX, event.clientY)
+          ?.closest<HTMLElement>("[data-note-id]");
+        onPointerUp(target?.dataset.noteId ?? null);
+      }}
+      onPointerLeave={() => {
+        if (!dragReady) onPointerLeave();
+      }}
+      onPointerMove={(event) => {
+        onPointerMove(event.clientX, event.clientY);
+      }}
+      className={`note-sidebar__item ${active ? "note-sidebar__item--active" : ""} ${dragging ? "note-sidebar__item--dragging" : ""} ${dropPlacement ? `note-sidebar__item--drop-${dropPlacement}` : ""} ${dragReady ? "select-none" : ""}`}
+      title={`${note.title || "无标题"}\n${stripMarkdown(note.preview) || "空便签"}`}
+    >
+      <span className="note-sidebar__item-title">
+        <span className="min-w-0 truncate">{note.title || "无标题"}</span>
+        <span className="note-sidebar__item-actions">
+          <span
+            role="button"
+            tabIndex={0}
+            className={`note-sidebar__icon-button ${note.is_pinned ? "text-amber-500" : "text-gray-400"}`}
+            title={note.is_pinned ? "取消固定" : "固定"}
+            aria-label={note.is_pinned ? "取消固定" : "固定"}
+            onClick={(event) => {
+              event.stopPropagation();
+              onTogglePin(note.id);
+            }}
+            onPointerDown={(event) => event.stopPropagation()}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter" && event.key !== " ") return;
+              event.preventDefault();
+              event.stopPropagation();
+              onTogglePin(note.id);
+            }}
+          >
+            {note.is_pinned ? <Pin className="h-3.5 w-3.5" /> : <PinOff className="h-3.5 w-3.5" />}
+          </span>
+          <span
+            role="button"
+            tabIndex={0}
+            className="note-sidebar__icon-button text-gray-400 hover:bg-red-50 hover:text-red-500"
+            title="删除"
+            aria-label="删除便签"
+            onClick={(event) => {
+              event.stopPropagation();
+              onDelete(note.id);
+            }}
+            onPointerDown={(event) => event.stopPropagation()}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter" && event.key !== " ") return;
+              event.preventDefault();
+              event.stopPropagation();
+              onDelete(note.id);
+            }}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </span>
+        </span>
+      </span>
+      <span className="note-sidebar__item-text">{stripMarkdown(note.preview) || "空便签"}</span>
+      <span className="mt-2 block truncate text-[10px] text-gray-400">{formatRelativeTime(note.updated_at)}</span>
+    </button>
+  );
+}
+
 function getMenuPosition(x: number, y: number): { x: number; y: number } {
   const margin = 8;
-  const menuWidth = 160;
-  const menuHeight = 104;
+  const menuWidth = 190;
+  const menuHeight = 56;
   return {
     x: Math.min(x, window.innerWidth - menuWidth - margin),
     y: Math.min(y, window.innerHeight - menuHeight - margin),
@@ -280,9 +534,13 @@ function getMenuPosition(x: number, y: number): { x: number; y: number } {
 function ClipboardSidebar({
   items,
   pinnedItems,
+  onSelect,
+  onContextMenu,
 }: {
   items: ClipboardItem[];
   pinnedItems: ClipboardItem[];
+  onSelect: (id: string) => void;
+  onContextMenu: (event: React.MouseEvent, itemId: string) => void;
 }) {
   if (items.length === 0 && pinnedItems.length === 0) {
     return (
@@ -292,9 +550,7 @@ function ClipboardSidebar({
             <Clipboard className="h-7 w-7" />
           </div>
           <h3 className="mt-4 text-sm font-semibold text-gray-700">跨设备剪贴板</h3>
-          <p className="mt-2 text-xs leading-5 text-gray-400">
-            复制文本、链接、代码或图文内容后会出现在这里。
-          </p>
+          <p className="mt-2 text-xs leading-5 text-gray-400">复制文本、链接、代码或图文内容后会出现在这里。</p>
         </div>
       </div>
     );
@@ -305,26 +561,44 @@ function ClipboardSidebar({
       {pinnedItems.length > 0 && (
         <section className="clipboard-sidebar__section">
           <h3 className="clipboard-sidebar__title">固定</h3>
-          {pinnedItems.map((item) => <ClipboardSidebarItem key={item.id} item={item} />)}
+          {pinnedItems.map((item) => (
+            <ClipboardSidebarItem key={item.id} item={item} onSelect={onSelect} onContextMenu={onContextMenu} />
+          ))}
         </section>
       )}
       <section className="clipboard-sidebar__section">
         <h3 className="clipboard-sidebar__title">最近</h3>
-        {items.map((item) => <ClipboardSidebarItem key={item.id} item={item} />)}
+        {items.map((item) => (
+          <ClipboardSidebarItem key={item.id} item={item} onSelect={onSelect} onContextMenu={onContextMenu} />
+        ))}
       </section>
     </div>
   );
 }
 
-function ClipboardSidebarItem({ item }: { item: ClipboardItem }) {
+function ClipboardSidebarItem({
+  item,
+  onSelect,
+  onContextMenu,
+}: {
+  item: ClipboardItem;
+  onSelect: (id: string) => void;
+  onContextMenu: (event: React.MouseEvent, itemId: string) => void;
+}) {
   return (
-    <div className="clipboard-sidebar__item" title={stripClipboardPreview(item)}>
-      <div className="clipboard-sidebar__item-title">
+    <button
+      type="button"
+      className="clipboard-sidebar__item"
+      title={stripClipboardPreview(item)}
+      onClick={() => onSelect(item.id)}
+      onContextMenu={(event) => onContextMenu(event, item.id)}
+    >
+      <span className="clipboard-sidebar__item-title">
         <span>{clipboardKindLabel(item.kind)}</span>
         <span className="text-[10px] font-normal text-gray-400">{formatRelativeTime(item.last_copied_at)}</span>
-      </div>
-      <p className="clipboard-sidebar__item-text">{stripClipboardPreview(item)}</p>
-    </div>
+      </span>
+      <span className="clipboard-sidebar__item-text">{stripClipboardPreview(item)}</span>
+    </button>
   );
 }
 
@@ -338,5 +612,12 @@ function clipboardKindLabel(kind: ClipboardItem["kind"]): string {
 
 function stripClipboardPreview(item: ClipboardItem): string {
   const preview = item.preview || item.content;
-  return stripHtml(preview).replace(/\s+/g, " ").trim() || "空剪贴板内容";
+  return stripMarkdown(stripHtml(preview)).replace(/\s+/g, " ").trim() || "空剪贴板内容";
+}
+
+function clearLongPressTimer(ref: React.MutableRefObject<number | null>): void {
+  if (ref.current) {
+    window.clearTimeout(ref.current);
+    ref.current = null;
+  }
 }

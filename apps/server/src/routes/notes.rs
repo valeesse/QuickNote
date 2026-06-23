@@ -1,6 +1,6 @@
 use crate::error::AppError;
 use crate::middleware::AuthUser;
-use crate::models::{CreateNoteRequest, Note, NoteSummary, UpdateNoteRequest};
+use crate::models::{CreateNoteRequest, Note, NoteSummary, ReorderNotesRequest, UpdateNoteRequest};
 use crate::routes::sync::{append_change, ChangePayload};
 use crate::AppState;
 use axum::extract::{Path, Query, State};
@@ -19,12 +19,19 @@ pub async fn create_note(
     let now = chrono::Utc::now().to_rfc3339();
     let title = extract_title(&req.content);
     let mut tx = state.db.inner().begin().await?;
-    let query = format!("INSERT INTO notes (id,user_id,title,content,is_pinned,created_at,updated_at,version,is_deleted) VALUES ($1,$2,$3,$4,false,$5,$5,1,false) RETURNING {NOTE_COLUMNS}");
+    let sort_order: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM notes WHERE user_id=$1 AND is_deleted=false AND is_pinned=false",
+    )
+    .bind(user_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    let query = format!("INSERT INTO notes (id,user_id,title,content,is_pinned,sort_order,created_at,updated_at,version,is_deleted) VALUES ($1,$2,$3,$4,false,$5,$6,$6,1,false) RETURNING {NOTE_COLUMNS}");
     let note: Note = sqlx::query_as(&query)
         .bind(&id)
         .bind(user_id)
         .bind(title)
         .bind(req.content)
+        .bind(sort_order)
         .bind(now)
         .fetch_one(&mut *tx)
         .await?;
@@ -61,9 +68,43 @@ pub async fn list_notes(
     State(state): State<Arc<AppState>>,
     AuthUser(user_id): AuthUser,
 ) -> Result<Json<Vec<NoteSummary>>, AppError> {
-    let notes = sqlx::query_as("SELECT id,title,LEFT(content,200) AS preview,is_pinned,created_at,updated_at FROM notes WHERE user_id=$1 AND is_deleted=false ORDER BY is_pinned DESC,updated_at DESC")
+    let notes = sqlx::query_as("SELECT id,title,LEFT(content,200) AS preview,is_pinned,created_at,updated_at FROM notes WHERE user_id=$1 AND is_deleted=false ORDER BY is_pinned DESC,sort_order ASC,updated_at DESC")
         .bind(user_id).fetch_all(state.db.inner()).await?;
     Ok(Json(notes))
+}
+
+pub async fn reorder_notes(
+    State(state): State<Arc<AppState>>,
+    AuthUser(user_id): AuthUser,
+    Json(req): Json<ReorderNotesRequest>,
+) -> Result<Json<bool>, AppError> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut tx = state.db.inner().begin().await?;
+    for (index, id) in req.ids.iter().enumerate() {
+        let query = format!("UPDATE notes SET is_pinned=$3,sort_order=$4,updated_at=$5 WHERE id=$1 AND user_id=$2 AND is_deleted=false RETURNING {NOTE_COLUMNS}");
+        let note: Option<Note> = sqlx::query_as(&query)
+            .bind(id)
+            .bind(user_id)
+            .bind(req.is_pinned)
+            .bind(index as i64)
+            .bind(&now)
+            .fetch_optional(&mut *tx)
+            .await?;
+        if let Some(note) = note {
+            append_change(
+                &mut tx,
+                user_id,
+                "note",
+                id,
+                "upsert",
+                ChangePayload::Note(note),
+            )
+            .await?;
+            notify(&state, user_id, id, "upsert");
+        }
+    }
+    tx.commit().await?;
+    Ok(Json(true))
 }
 
 pub async fn update_note(

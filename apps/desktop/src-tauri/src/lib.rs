@@ -188,6 +188,7 @@ pub fn run() {
             commands::purge_note,
             commands::list_deleted_notes,
             commands::toggle_pin,
+            commands::reorder_notes,
             commands::search_notes,
             commands::get_note_versions,
             commands::restore_note_version,

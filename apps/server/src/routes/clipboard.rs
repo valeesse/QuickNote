@@ -98,6 +98,37 @@ pub async fn delete_item(
     Ok(Json(true))
 }
 
+pub async fn toggle_pin(
+    State(state): State<Arc<AppState>>,
+    AuthUser(user_id): AuthUser,
+    Path(id): Path<String>,
+) -> Result<Json<bool>, AppError> {
+    let mut tx = state.db.inner().begin().await?;
+    let query = format!("UPDATE clipboard_items SET is_pinned=NOT is_pinned,updated_at=$3 WHERE id=$1 AND user_id=$2 AND is_deleted=false RETURNING {COLUMNS}");
+    let item: Option<ClipboardItem> = sqlx::query_as(&query)
+        .bind(&id)
+        .bind(user_id)
+        .bind(chrono::Utc::now().to_rfc3339())
+        .fetch_optional(&mut *tx)
+        .await?;
+    let Some(item) = item else {
+        tx.rollback().await?;
+        return Ok(Json(false));
+    };
+    append_change(
+        &mut tx,
+        user_id,
+        "clipboard",
+        &id,
+        "upsert",
+        ChangePayload::Clipboard(item),
+    )
+    .await?;
+    tx.commit().await?;
+    notify(&state, user_id, &id, "upsert");
+    Ok(Json(true))
+}
+
 fn notify(state: &AppState, user_id: uuid::Uuid, id: &str, operation: &str) {
     let _ = state.event_tx.send(crate::models::SyncEvent {
         user_id,

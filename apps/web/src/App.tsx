@@ -9,7 +9,7 @@ import { useNotes } from "@/hooks/useNotes";
 import { useClipboard } from "@/hooks/useClipboard";
 import { useCloudEvents } from "@/hooks/useCloudEvents";
 import { Search, X } from "lucide-react";
-import type { AppView } from "@/types";
+import type { AppView, ClipboardItem } from "@/types";
 
 const NoteEditor = React.lazy(() =>
   import("@/components/NoteEditor").then((m) => ({ default: m.NoteEditor })),
@@ -46,11 +46,13 @@ function MainApp({ userEmail, onLogout }: { userEmail: string; onLogout: () => v
     deleteNote,
     restoreNote,
     togglePin,
+    reorderNotes,
     loadNotes,
   } = useNotes();
 
   const clipboard = useClipboard();
   const [viewMode, setViewMode] = useState<AppView>("notes");
+  const [focusedClipboardItemId, setFocusedClipboardItemId] = useState<string | null>(null);
   const [deletedToast, setDeletedToast] = useState<{
     id: string;
     title: string;
@@ -79,12 +81,23 @@ function MainApp({ userEmail, onLogout }: { userEmail: string; onLogout: () => v
     if (await restoreNote(id)) await selectNote(id);
   };
 
+  const changeViewMode = (mode: AppView) => {
+    setViewMode(mode);
+  };
+
+  const handleCreateNoteFromClipboard = async (id: string) => {
+    const item = clipboard.items.find((entry) => entry.id === id);
+    if (!item) return;
+    setViewMode("notes");
+    await createNote(clipboardItemToNoteContent(item));
+  };
+
   return (
     <div className="flex h-screen overflow-hidden">
       {/* Sidebar */}
       <Sidebar
         viewMode={viewMode}
-        onViewModeChange={setViewMode}
+        onViewModeChange={changeViewMode}
         clipboardCount={clipboard.items.length}
         clipboardItems={clipboard.items}
         notes={notes}
@@ -95,6 +108,12 @@ function MainApp({ userEmail, onLogout }: { userEmail: string; onLogout: () => v
         onCreateNote={createNote}
         onDeleteNote={(id) => void handleDeleteNote(id)}
         onTogglePin={togglePin}
+        onReorderNotes={(ids, isPinned) => void reorderNotes(ids, isPinned)}
+        onSelectClipboardItem={(id) => {
+          setFocusedClipboardItemId(id);
+          setViewMode("clipboard");
+        }}
+        onCreateNoteFromClipboard={(id) => void handleCreateNoteFromClipboard(id)}
         userEmail={userEmail}
         onLogout={onLogout}
       />
@@ -110,7 +129,10 @@ function MainApp({ userEmail, onLogout }: { userEmail: string; onLogout: () => v
             onQueryChange={clipboard.setQuery}
             onCapture={clipboard.capture}
             onCopy={clipboard.copyItem}
+            onTogglePin={(id) => void clipboard.togglePin(id)}
             onDelete={clipboard.deleteItem}
+            focusedItemId={focusedClipboardItemId}
+            onCreateNoteFromItem={(id) => void handleCreateNoteFromClipboard(id)}
           />
         ) : (
           <>
@@ -183,7 +205,7 @@ function MainApp({ userEmail, onLogout }: { userEmail: string; onLogout: () => v
       <nav className="fixed inset-x-0 bottom-0 z-30 grid h-14 grid-cols-2 border-t border-gray-200 bg-white/95 px-2 backdrop-blur md:hidden">
         <button
           type="button"
-          onClick={() => setViewMode("notes")}
+          onClick={() => changeViewMode("notes")}
           className={`focus-ring rounded-lg text-sm font-medium ${viewMode === "notes" ? "text-blue-600" : "text-gray-500"}`}
           aria-pressed={viewMode === "notes"}
         >
@@ -191,7 +213,7 @@ function MainApp({ userEmail, onLogout }: { userEmail: string; onLogout: () => v
         </button>
         <button
           type="button"
-          onClick={() => setViewMode("clipboard")}
+          onClick={() => changeViewMode("clipboard")}
           className={`focus-ring rounded-lg text-sm font-medium ${viewMode === "clipboard" ? "text-violet-600" : "text-gray-500"}`}
           aria-pressed={viewMode === "clipboard"}
         >
@@ -222,4 +244,25 @@ function MainApp({ userEmail, onLogout }: { userEmail: string; onLogout: () => v
       )}
     </div>
   );
+}
+
+function clipboardItemToNoteContent(item: ClipboardItem): string {
+  if (item.kind === "rich" || item.kind === "image") return item.content;
+  if (item.kind === "code") {
+    return `<pre><code>${escapeHtml(item.content)}</code></pre>`;
+  }
+  const text = escapeHtml(item.content)
+    .split(/\r?\n/)
+    .map((line) => line || "<br>")
+    .join("</p><p>");
+  return `<p>${text}</p>`;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }

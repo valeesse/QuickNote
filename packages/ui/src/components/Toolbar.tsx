@@ -22,9 +22,10 @@ interface ToolbarProps {
   editor: any;
   note: { title: string };
   onInsertImage: () => void;
+  extraActions?: React.ReactNode;
 }
 
-export function Toolbar({ editor, note, onInsertImage }: ToolbarProps) {
+export function Toolbar({ editor, note, onInsertImage, extraActions }: ToolbarProps) {
   const importMarkdown = useCallback(() => {
     const input = document.createElement("input");
     input.type = "file";
@@ -169,6 +170,12 @@ export function Toolbar({ editor, note, onInsertImage }: ToolbarProps) {
       <ToolbarButton onClick={exportMarkdown} title="导出 Markdown">
         <FileDown className="h-4 w-4" />
       </ToolbarButton>
+      {extraActions && (
+        <>
+          <ToolbarDivider />
+          {extraActions}
+        </>
+      )}
     </div>
   );
 }

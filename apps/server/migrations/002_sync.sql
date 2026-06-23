@@ -33,3 +33,7 @@ CREATE TABLE IF NOT EXISTS sync_cursors (
     cursor_seq BIGINT NOT NULL DEFAULT 0,
     UNIQUE(user_id, device_id)
 );
+
+ALTER TABLE notes ADD COLUMN IF NOT EXISTS sort_order BIGINT NOT NULL DEFAULT 0;
+DROP INDEX IF EXISTS idx_notes_updated;
+CREATE INDEX IF NOT EXISTS idx_notes_updated ON notes(user_id, is_pinned DESC, sort_order ASC, updated_at DESC);

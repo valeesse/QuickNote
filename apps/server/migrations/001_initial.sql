@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS notes (
     title TEXT NOT NULL DEFAULT '',
     content TEXT NOT NULL DEFAULT '',
     is_pinned BOOLEAN NOT NULL DEFAULT false,
+    sort_order BIGINT NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     version BIGINT NOT NULL DEFAULT 1,
@@ -29,7 +30,7 @@ CREATE TABLE IF NOT EXISTS notes (
 
 CREATE INDEX IF NOT EXISTS idx_notes_user_id ON notes(user_id);
 CREATE INDEX IF NOT EXISTS idx_notes_search ON notes USING GIN(search_vector);
-CREATE INDEX IF NOT EXISTS idx_notes_updated ON notes(user_id, is_pinned DESC, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notes_updated ON notes(user_id, is_pinned DESC, sort_order ASC, updated_at DESC);
 
 -- Note versions
 CREATE TABLE IF NOT EXISTS note_versions (
