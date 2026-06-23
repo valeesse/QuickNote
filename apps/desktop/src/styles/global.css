@@ -1,4 +1,6 @@
 @import "tailwindcss";
 @import "../../../../packages/styles/index.css";
 
+@source "../../../../packages/ui/src/**/*.{js,ts,jsx,tsx}";
+
 /* Desktop-specific overrides only — shared styles are in packages/styles/ */

@@ -6,8 +6,11 @@ export { EmptyState } from "./components/EmptyState";
 export { EditorSkeleton } from "./components/EditorSkeleton";
 export { NoteCard, NoteSectionLabel } from "./components/NoteCard";
 export type { NoteCardProps } from "./components/NoteCard";
+export { TrashPanel } from "./components/TrashPanel";
+export { HistoryPanel } from "./components/HistoryPanel";
 
 // Utility functions
 export { compressImageToDataUrl } from "./utils/image";
 export { formatSaveStatus, sanitizeFilename, formatRelativeTime } from "./utils/format";
 export { stripHtml, stripMarkdown } from "./utils/html";
+export { clipboardItemToNoteContent, escapeHtml } from "./utils/clipboard";

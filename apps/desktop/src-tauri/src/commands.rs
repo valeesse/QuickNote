@@ -238,7 +238,8 @@ pub fn capture_clipboard(
     if content.trim().is_empty() {
         return Ok(None);
     }
-    let fingerprint = format!("{:x}", Sha256::digest(content.as_bytes()));
+    let normalized = content.replace("\r\n", "\n").replace('\r', "\n");
+    let fingerprint = format!("{:x}", Sha256::digest(format!("clipboard:text:{normalized}")));
     if capture_state
         .fingerprint
         .lock()
@@ -291,7 +292,7 @@ pub fn copy_clipboard_item(
         .fingerprint
         .lock()
         .map_err(|_| "clipboard capture state is unavailable".to_string())? =
-        Some(format!("{:x}", Sha256::digest(item.content.as_bytes())));
+        Some(format!("{:x}", Sha256::digest(format!("clipboard:text:{}", item.content))));
     Ok(true)
 }
 

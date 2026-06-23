@@ -1,14 +1,4 @@
-export type { AppView, ClipboardItem, Note, NoteSummary, SaveStatus } from "@contracts";
-
-export interface NoteVersion {
-  id: number;
-  note_id: string;
-  title: string;
-  content: string;
-  version: number;
-  created_at: string;
-  is_pinned: boolean;
-}
+export type { AppView, ClipboardItem, Note, NoteSummary, NoteVersion, SaveStatus } from "@contracts";
 
 export interface Attachment {
   id: string;

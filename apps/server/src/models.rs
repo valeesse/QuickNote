@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 pub use quicknote_protocol::{
-    AttachmentRecord, CausalVersion, ClipboardItem, Note, NoteSummary, SyncEnvelope,
+    AttachmentRecord, CausalVersion, ClipboardItem, Note, NoteSummary, NoteVersion, SyncEnvelope,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]

@@ -40,6 +40,16 @@ export interface AttachmentRecord {
   created_at: string;
 }
 
+export interface NoteVersion {
+  id: number;
+  note_id: string;
+  title: string;
+  content: string;
+  version: number;
+  created_at: string;
+  is_pinned: boolean;
+}
+
 export type SaveStatus = "idle" | "saving" | "saved" | "retrying" | "error";
 export type AppView = "notes" | "clipboard";
 

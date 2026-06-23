@@ -28,6 +28,18 @@ pub struct NoteSummary {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
+pub struct NoteVersion {
+    pub id: i64,
+    pub note_id: String,
+    pub title: String,
+    pub content: String,
+    pub version: i64,
+    pub created_at: String,
+    pub is_pinned: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
 pub struct AttachmentRecord {
     pub id: String,
     pub relative_path: String,

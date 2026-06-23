@@ -1,22 +1,15 @@
 /* ── Shared component styles ── */
 
 /* Scrollbar */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+* {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
 
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-::-webkit-scrollbar-thumb {
-  background: #d1d5db;
-  border-radius: 999px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: #9ca3af;
+*::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
 }
 
 /* Note card */
@@ -81,6 +74,7 @@
 
 .clipboard-panel__shell {
   width: min(100%, 1120px);
+  min-width: 0;
   margin: 0 auto;
 }
 
@@ -235,6 +229,7 @@
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
   gap: 16px;
+  min-width: 0;
 }
 
 .clipboard-panel__empty {
@@ -281,7 +276,9 @@
   display: flex;
   min-height: 144px;
   min-width: 0;
+  max-width: 100%;
   flex-direction: column;
+  overflow: hidden;
   border: 1px solid rgb(229 231 235 / 0.9);
   border-radius: 16px;
   background: #fff;
@@ -312,6 +309,7 @@
 .clipboard-card__header,
 .clipboard-card__meta {
   display: flex;
+  min-width: 0;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
@@ -334,6 +332,9 @@
   appearance: none;
   flex: 1 1 auto;
   min-height: 64px;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   margin-top: 8px;
   border: 0;
   border-radius: 10px;
@@ -349,10 +350,17 @@
   color: #374151;
   font-size: 0.8125rem;
   line-height: 1.55;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .clipboard-card__rich :where(p, ul, ol, pre) {
+  max-width: 100%;
   margin: 0 0 8px;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .clipboard-card__rich :where(img) {
@@ -367,6 +375,20 @@
   color: #2563eb;
   text-decoration: underline;
   text-underline-offset: 2px;
+}
+
+.clipboard-card :where(p, code) {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.clipboard-card__meta > span,
+.clipboard-sidebar__item-title > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .clipboard-sidebar {
@@ -396,6 +418,9 @@
   position: relative;
   display: block;
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   border: 1px solid #eef0f4;
   border-radius: 10px;
   background: #fff;
@@ -428,6 +453,7 @@
 
 .clipboard-sidebar__item-title {
   display: flex;
+  min-width: 0;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
@@ -443,6 +469,8 @@
   color: #6b7280;
   font-size: 0.75rem;
   line-height: 1.45;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }
@@ -473,6 +501,9 @@
   position: relative;
   display: block;
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   border: 1px solid #eef0f4;
   border-radius: 10px;
   background: #fff;
@@ -547,6 +578,7 @@
   z-index: 60;
   width: 244px;
   max-width: calc(100vw - 32px);
+  overflow: hidden;
   border: 1px solid #93c5fd;
   border-radius: 10px;
   background: #fff;
@@ -629,6 +661,8 @@
   color: #6b7280;
   font-size: 0.75rem;
   line-height: 1.45;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }

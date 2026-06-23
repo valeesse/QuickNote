@@ -36,18 +36,19 @@ pub async fn capture(
             "Clipboard content exceeds 5 MB".into(),
         ));
     }
-    let id = format!("{:x}", Sha256::digest(req.content.as_bytes()));
-    let kind = req.kind.unwrap_or_else(|| detect_kind(&req.content));
+    let normalized = normalize_clipboard_content(&req.content);
+    let id = format!("{:x}", Sha256::digest(format!("clipboard:text:{normalized}")));
+    let kind = req.kind.unwrap_or_else(|| detect_kind(&normalized));
     let device = req.source_device.unwrap_or_else(|| "web".into());
     let now = chrono::Utc::now().to_rfc3339();
-    let preview = clipboard_preview(&req.content, &kind);
+    let preview = clipboard_preview(&normalized, &kind);
     let mut tx = state.db.inner().begin().await?;
     let query = format!("INSERT INTO clipboard_items (id,user_id,kind,content,preview,source_device,created_at,updated_at,last_copied_at,capture_count,is_pinned,is_deleted) VALUES ($1,$2,$3,$4,$5,$6,$7,$7,$7,1,false,false) ON CONFLICT (user_id,id) DO UPDATE SET capture_count=clipboard_items.capture_count+1,last_copied_at=EXCLUDED.last_copied_at,updated_at=EXCLUDED.updated_at,is_deleted=false RETURNING {COLUMNS}");
     let item: ClipboardItem = sqlx::query_as(&query)
         .bind(&id)
         .bind(user_id)
         .bind(kind)
-        .bind(req.content)
+        .bind(normalized)
         .bind(preview)
         .bind(device)
         .bind(now)
@@ -171,6 +172,10 @@ fn clipboard_preview(content: &str, kind: &str) -> String {
         content.replace('\n', " ")
     };
     preview.chars().take(200).collect()
+}
+
+fn normalize_clipboard_content(content: &str) -> String {
+    content.replace("\r\n", "\n").replace('\r', "\n")
 }
 
 fn strip_html_tags(content: &str) -> String {

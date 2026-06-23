@@ -129,6 +129,29 @@ export const notesApi = {
     apiFetch<import("@/types").NoteSummary[]>(
       `/api/notes/search?q=${encodeURIComponent(q)}`,
     ),
+  // Trash
+  listDeleted: () =>
+    apiFetch<import("@/types").NoteSummary[]>("/api/notes/trash"),
+  purge: (id: string) =>
+    apiFetch<boolean>(`/api/notes/${id}/purge`, { method: "DELETE" }),
+  // Versions
+  listVersions: (id: string) =>
+    apiFetch<import("@/types").NoteVersion[]>(`/api/notes/${id}/versions`),
+  restoreVersion: (noteId: string, versionId: number) =>
+    apiFetch<import("@/types").Note>(
+      `/api/notes/${noteId}/versions/${versionId}/restore`,
+      { method: "POST" },
+    ),
+  toggleVersionPin: (versionId: number) =>
+    apiFetch<boolean>(`/api/notes/versions/${versionId}/pin`, {
+      method: "PATCH",
+    }),
+  deleteVersion: (versionId: number) =>
+    apiFetch<boolean>(`/api/notes/versions/${versionId}`, {
+      method: "DELETE",
+    }),
+  clearVersions: (noteId: string) =>
+    apiFetch<boolean>(`/api/notes/${noteId}/versions`, { method: "DELETE" }),
 };
 
 // Clipboard API

@@ -31,6 +31,8 @@ interface NoteEditorProps {
   onUpdate: (id: string, content: string) => void;
   saveStatus: SaveStatus;
   errorMessage: string | null;
+  onOpenHistory?: () => void;
+  isSyncing?: boolean;
 }
 
 export function NoteEditor({
@@ -38,6 +40,8 @@ export function NoteEditor({
   onUpdate,
   saveStatus,
   errorMessage,
+  onOpenHistory,
+  isSyncing,
 }: NoteEditorProps) {
   const noteIdRef = useRef(note.id);
   const onUpdateRef = useRef(onUpdate);
@@ -300,8 +304,26 @@ export function NoteEditor({
         <span className={saveStatus === "error" ? "text-red-500" : ""}>
           {formatSaveStatus(saveStatus, errorMessage)}
         </span>
-        <span>历史版本</span>
+        {onOpenHistory ? (
+          <button type="button" onClick={onOpenHistory} className="hover:text-gray-600" title="历史版本" aria-label="打开历史版本">
+            历史版本
+          </button>
+        ) : (
+          <span>历史版本</span>
+        )}
       </div>
+
+      {isSyncing && (
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-white/70">
+          <div className="flex items-center gap-2 rounded-lg bg-white px-4 py-2 text-sm text-gray-600 shadow">
+            <svg className="h-4 w-4 animate-spin text-blue-500" viewBox="0 0 24 24" fill="none">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+            同步中…
+          </div>
+        </div>
+      )}
     </div>
   );
 }

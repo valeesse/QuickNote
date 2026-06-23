@@ -81,6 +81,8 @@ async fn main() {
             get(routes::notes::list_notes).post(routes::notes::create_note),
         )
         .route("/api/notes/reorder", post(routes::notes::reorder_notes))
+        .route("/api/notes/trash", get(routes::notes::list_deleted_notes))
+        .route("/api/notes/search", get(routes::notes::search_notes))
         .route(
             "/api/notes/{id}",
             get(routes::notes::get_note)
@@ -89,7 +91,23 @@ async fn main() {
         )
         .route("/api/notes/{id}/restore", post(routes::notes::restore_note))
         .route("/api/notes/{id}/pin", patch(routes::notes::toggle_pin))
-        .route("/api/notes/search", get(routes::notes::search_notes))
+        .route("/api/notes/{id}/purge", delete(routes::notes::purge_note))
+        .route(
+            "/api/notes/{id}/versions",
+            get(routes::notes::list_versions).delete(routes::notes::clear_versions),
+        )
+        .route(
+            "/api/notes/{id}/versions/{vid}/restore",
+            post(routes::notes::restore_version),
+        )
+        .route(
+            "/api/notes/versions/{vid}",
+            delete(routes::notes::delete_version),
+        )
+        .route(
+            "/api/notes/versions/{vid}/pin",
+            patch(routes::notes::toggle_version_pin),
+        )
         // Clipboard (protected)
         .route(
             "/api/clipboard",

@@ -405,6 +405,21 @@ export function useNotes() {
     [loadDeletedNotes]
   );
 
+  const purgeAllNotes = useCallback(async () => {
+    try {
+      for (const note of deletedNotes) {
+        await invoke("purge_note", { id: note.id });
+        draftsRef.current.delete(note.id);
+      }
+      persistDraftJournal(draftsRef.current);
+      await invoke("cleanup_attachments");
+      await loadDeletedNotes();
+    } catch (err) {
+      console.error("Failed to purge all notes:", err);
+      setErrorMessage(getErrorMessage(err));
+    }
+  }, [deletedNotes, loadDeletedNotes]);
+
   const loadVersions = useCallback(async (id: string) => {
     try {
       const results = await invoke<NoteVersion[]>("get_note_versions", { id });
@@ -554,6 +569,7 @@ export function useNotes() {
     restoreNote,
     undoDelete,
     purgeNote,
+    purgeAllNotes,
     loadVersions,
     restoreVersion,
     toggleVersionPin,

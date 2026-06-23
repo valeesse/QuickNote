@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { notesApi } from "@/api/client";
-import type { Note, NoteSummary, SaveStatus } from "@/types";
+import type { Note, NoteSummary, NoteVersion, SaveStatus } from "@/types";
 
 const SAVE_DELAY_MS = 800;
 const DRAFT_KEY = "quicknote-web-drafts-v1";
@@ -9,10 +9,13 @@ export function useNotes() {
   const [notes, setNotes] = useState<NoteSummary[]>([]);
   const [activeNote, setActiveNote] = useState<Note | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [deletedNotes, setDeletedNotes] = useState<NoteSummary[]>([]);
+  const [versions, setVersions] = useState<NoteVersion[]>([]);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const activeNoteIdRef = useRef<string | null>(null);
+  const lastDeletedIdRef = useRef<string | null>(null);
   const pendingRef = useRef(new Map<string, string>());
   const timersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const queuesRef = useRef(new Map<string, Promise<boolean>>());
@@ -133,6 +136,7 @@ export function useNotes() {
     try {
       await notesApi.delete(id);
       removeDraft(id);
+      lastDeletedIdRef.current = id;
       if (activeNoteIdRef.current === id) { activeNoteIdRef.current = null; setActiveNote(null); }
       await loadNotes();
       return true;
@@ -151,17 +155,110 @@ export function useNotes() {
     } catch (error) { setErrorMessage(messageOf(error)); }
   }, [flushSave, loadNotes]);
 
+  const loadDeletedNotes = useCallback(async () => {
+    try {
+      const results = await notesApi.listDeleted();
+      setDeletedNotes(results);
+      return results;
+    } catch (error) {
+      setErrorMessage(messageOf(error));
+      return [];
+    }
+  }, []);
+
   const restoreNote = useCallback(async (id: string) => {
     try {
       await notesApi.restore(id);
       await loadNotes();
+      await loadDeletedNotes();
+      const note = await notesApi.get(id);
+      if (note) setActiveNote(note);
       return true;
     }
     catch (error) {
       setErrorMessage(messageOf(error));
       return false;
     }
-  }, [loadNotes]);
+  }, [loadDeletedNotes, loadNotes]);
+
+  const undoDelete = useCallback(async () => {
+    if (!lastDeletedIdRef.current) return;
+    await restoreNote(lastDeletedIdRef.current);
+    lastDeletedIdRef.current = null;
+  }, [restoreNote]);
+
+  const purgeNote = useCallback(async (id: string) => {
+    try {
+      await notesApi.purge(id);
+      removeDraft(id);
+      await loadDeletedNotes();
+    } catch (error) {
+      setErrorMessage(messageOf(error));
+    }
+  }, [loadDeletedNotes]);
+
+  const purgeAllNotes = useCallback(async () => {
+    try {
+      for (const note of deletedNotes) {
+        await notesApi.purge(note.id);
+        removeDraft(note.id);
+      }
+      await loadDeletedNotes();
+    } catch (error) {
+      setErrorMessage(messageOf(error));
+    }
+  }, [deletedNotes, loadDeletedNotes]);
+
+  const loadVersions = useCallback(async (id: string) => {
+    try {
+      const results = await notesApi.listVersions(id);
+      setVersions(results);
+      return results;
+    } catch (error) {
+      setErrorMessage(messageOf(error));
+      return [];
+    }
+  }, []);
+
+  const restoreVersion = useCallback(async (noteId: string, versionId: number) => {
+    try {
+      const restored = await notesApi.restoreVersion(noteId, versionId);
+      removeDraft(noteId);
+      activeNoteIdRef.current = noteId;
+      setActiveNote(restored);
+      await loadNotes();
+      await loadVersions(noteId);
+    } catch (error) {
+      setErrorMessage(messageOf(error));
+    }
+  }, [loadNotes, loadVersions]);
+
+  const toggleVersionPin = useCallback(async (noteId: string, versionId: number) => {
+    try {
+      await notesApi.toggleVersionPin(versionId);
+      await loadVersions(noteId);
+    } catch (error) {
+      setErrorMessage(messageOf(error));
+    }
+  }, [loadVersions]);
+
+  const deleteVersion = useCallback(async (noteId: string, versionId: number) => {
+    try {
+      await notesApi.deleteVersion(versionId);
+      await loadVersions(noteId);
+    } catch (error) {
+      setErrorMessage(messageOf(error));
+    }
+  }, [loadVersions]);
+
+  const clearVersions = useCallback(async (noteId: string) => {
+    try {
+      await notesApi.clearVersions(noteId);
+      await loadVersions(noteId);
+    } catch (error) {
+      setErrorMessage(messageOf(error));
+    }
+  }, [loadVersions]);
 
   useEffect(() => {
     const timer = setTimeout(() => void loadNotes(), searchQuery.trim() ? 300 : 0);
@@ -180,7 +277,34 @@ export function useNotes() {
     };
   }, [flushSave]);
 
-  return { notes, activeNote, isLoading, saveStatus, errorMessage, searchQuery, setSearchQuery, createNote, selectNote, updateNote, deleteNote, togglePin, reorderNotes, loadNotes, restoreNote };
+  return {
+    notes,
+    activeNote,
+    isLoading,
+    deletedNotes,
+    versions,
+    saveStatus,
+    errorMessage,
+    searchQuery,
+    setSearchQuery,
+    createNote,
+    selectNote,
+    updateNote,
+    deleteNote,
+    togglePin,
+    reorderNotes,
+    loadNotes,
+    loadDeletedNotes,
+    restoreNote,
+    undoDelete,
+    purgeNote,
+    purgeAllNotes,
+    loadVersions,
+    restoreVersion,
+    toggleVersionPin,
+    deleteVersion,
+    clearVersions,
+  };
 }
 
 function messageOf(error: unknown): string { return error instanceof Error ? error.message : String(error); }

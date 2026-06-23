@@ -6,5 +6,6 @@ export type {
   ClipboardItem,
   Note,
   NoteSummary,
+  NoteVersion,
   SaveStatus,
 } from "@contracts";

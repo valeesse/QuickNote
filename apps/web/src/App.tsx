@@ -4,12 +4,15 @@ import { Sidebar } from "@/components/Sidebar";
 import { ClipboardPanel } from "@ui/components/ClipboardPanel";
 import { EmptyState } from "@ui/components/EmptyState";
 import { EditorSkeleton } from "@ui/components/EditorSkeleton";
+import { TrashPanel } from "@ui/components/TrashPanel";
+import { HistoryPanel } from "@ui/components/HistoryPanel";
+import { clipboardItemToNoteContent } from "@ui/utils/clipboard";
 import { useAuth } from "@/hooks/useAuth";
 import { useNotes } from "@/hooks/useNotes";
 import { useClipboard } from "@/hooks/useClipboard";
 import { useCloudEvents } from "@/hooks/useCloudEvents";
 import { Search, X } from "lucide-react";
-import type { AppView, ClipboardItem } from "@/types";
+import type { AppView } from "@/types";
 
 const NoteEditor = React.lazy(() =>
   import("@/components/NoteEditor").then((m) => ({ default: m.NoteEditor })),
@@ -36,6 +39,8 @@ function MainApp({ userEmail, onLogout }: { userEmail: string; onLogout: () => v
   const {
     notes,
     activeNote,
+    deletedNotes,
+    versions,
     saveStatus,
     errorMessage,
     searchQuery,
@@ -45,16 +50,26 @@ function MainApp({ userEmail, onLogout }: { userEmail: string; onLogout: () => v
     updateNote,
     deleteNote,
     restoreNote,
+    undoDelete,
+    purgeNote,
+    purgeAllNotes,
     togglePin,
     reorderNotes,
     loadNotes,
+    loadDeletedNotes,
+    loadVersions,
+    restoreVersion,
+    toggleVersionPin,
+    deleteVersion,
+    clearVersions,
   } = useNotes();
 
   const clipboard = useClipboard();
   const [viewMode, setViewMode] = useState<AppView>("notes");
+  const [showTrash, setShowTrash] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
   const [focusedClipboardItemId, setFocusedClipboardItemId] = useState<string | null>(null);
   const [deletedToast, setDeletedToast] = useState<{
-    id: string;
     title: string;
   } | null>(null);
   useCloudEvents(() => {
@@ -71,26 +86,78 @@ function MainApp({ userEmail, onLogout }: { userEmail: string; onLogout: () => v
   const handleDeleteNote = async (id: string) => {
     const note = notes.find((item) => item.id === id);
     const deleted = await deleteNote(id);
-    if (deleted) setDeletedToast({ id, title: note?.title || "无标题" });
+    if (deleted) setDeletedToast({ title: note?.title || "无标题" });
   };
 
   const handleUndoDelete = async () => {
-    if (!deletedToast) return;
-    const { id } = deletedToast;
     setDeletedToast(null);
-    if (await restoreNote(id)) await selectNote(id);
+    await undoDelete();
+  };
+
+  const openOnlyPanel = (panel: "trash" | "history") => {
+    setShowTrash(panel === "trash");
+    setShowHistory(panel === "history");
   };
 
   const changeViewMode = (mode: AppView) => {
     setViewMode(mode);
+    setShowTrash(false);
+    setShowHistory(false);
+  };
+
+  const handleOpenHistory = async () => {
+    if (!activeNote) return;
+    if (showHistory) {
+      setShowHistory(false);
+      return;
+    }
+    await loadVersions(activeNote.id);
+    openOnlyPanel("history");
   };
 
   const handleCreateNoteFromClipboard = async (id: string) => {
     const item = clipboard.items.find((entry) => entry.id === id);
     if (!item) return;
     setViewMode("notes");
+    setShowTrash(false);
+    setShowHistory(false);
     await createNote(clipboardItemToNoteContent(item));
   };
+
+  useEffect(() => {
+    if (!activeNote?.id || !showHistory) return;
+    void loadVersions(activeNote.id);
+  }, [activeNote?.id, loadVersions, showHistory]);
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ctrl+N: New note
+      if ((e.ctrlKey || e.metaKey) && e.key === "n") {
+        e.preventDefault();
+        setViewMode("notes");
+        void createNote();
+      }
+      // Ctrl+F: Focus search
+      if ((e.ctrlKey || e.metaKey) && e.key === "f") {
+        e.preventDefault();
+        const searchInput = document.querySelector<HTMLInputElement>(
+          viewMode === "notes"
+            ? 'input[placeholder="搜索便签..."]'
+            : 'input[placeholder="搜索剪贴板历史"]',
+        );
+        searchInput?.focus();
+      }
+      // Ctrl+Shift+Z: Undo delete
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && e.shiftKey) {
+        e.preventDefault();
+        void undoDelete();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [createNote, undoDelete, viewMode]);
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -109,6 +176,15 @@ function MainApp({ userEmail, onLogout }: { userEmail: string; onLogout: () => v
         onDeleteNote={(id) => void handleDeleteNote(id)}
         onTogglePin={togglePin}
         onReorderNotes={(ids, isPinned) => void reorderNotes(ids, isPinned)}
+        onOpenTrash={async () => {
+          if (showTrash) {
+            setShowTrash(false);
+            return;
+          }
+          await loadDeletedNotes();
+          openOnlyPanel("trash");
+        }}
+        isTrashOpen={showTrash}
         onSelectClipboardItem={(id) => {
           setFocusedClipboardItemId(id);
           setViewMode("clipboard");
@@ -185,16 +261,25 @@ function MainApp({ userEmail, onLogout }: { userEmail: string; onLogout: () => v
               </label>
             </div>
 
-            <Suspense fallback={<EditorSkeleton />}>
+            <Suspense fallback={<EditorSkeleton showStatusBar />}>
               {activeNote ? (
                 <NoteEditor
                   note={activeNote}
                   onUpdate={updateNote}
                   saveStatus={saveStatus}
                   errorMessage={errorMessage}
+                  onOpenHistory={handleOpenHistory}
                 />
               ) : (
-                <EmptyState onCreateNote={createNote} />
+                <EmptyState
+                  onCreateNote={createNote}
+                  hints={
+                    <>
+                      <p><kbd className="px-1.5 py-0.5 bg-gray-100 rounded text-gray-500 font-mono text-xs">Ctrl+N</kbd> 新建便签</p>
+                      <p><kbd className="px-1.5 py-0.5 bg-gray-100 rounded text-gray-500 font-mono text-xs">Ctrl+F</kbd> 搜索便签</p>
+                    </>
+                  }
+                />
               )}
             </Suspense>
           </>
@@ -202,7 +287,7 @@ function MainApp({ userEmail, onLogout }: { userEmail: string; onLogout: () => v
       </div>
 
       {/* Mobile bottom nav */}
-      <nav className="fixed inset-x-0 bottom-0 z-30 grid h-14 grid-cols-2 border-t border-gray-200 bg-white/95 px-2 backdrop-blur md:hidden">
+      <nav className="fixed inset-x-0 bottom-0 z-30 grid h-14 grid-cols-4 border-t border-gray-200 bg-white/95 px-2 backdrop-blur md:hidden">
         <button
           type="button"
           onClick={() => changeViewMode("notes")}
@@ -218,6 +303,24 @@ function MainApp({ userEmail, onLogout }: { userEmail: string; onLogout: () => v
           aria-pressed={viewMode === "clipboard"}
         >
           剪贴板
+        </button>
+        <button
+          type="button"
+          onClick={async () => {
+            if (showTrash) { setShowTrash(false); return; }
+            await loadDeletedNotes();
+            openOnlyPanel("trash");
+          }}
+          className={`focus-ring rounded-lg text-sm font-medium ${showTrash ? "text-blue-600" : "text-gray-500"}`}
+        >
+          回收站
+        </button>
+        <button
+          type="button"
+          onClick={onLogout}
+          className="focus-ring rounded-lg text-sm font-medium text-gray-500"
+        >
+          退出
         </button>
       </nav>
 
@@ -242,27 +345,27 @@ function MainApp({ userEmail, onLogout }: { userEmail: string; onLogout: () => v
           {errorMessage}
         </div>
       )}
+
+      {showTrash && (
+        <TrashPanel
+          notes={deletedNotes}
+          onClose={() => setShowTrash(false)}
+          onRestore={restoreNote}
+          onPurge={purgeNote}
+          onPurgeAll={purgeAllNotes}
+        />
+      )}
+
+      {showHistory && activeNote && (
+        <HistoryPanel
+          versions={versions}
+          onClose={() => setShowHistory(false)}
+          onRestore={(versionId) => void restoreVersion(activeNote.id, versionId)}
+          onTogglePin={(versionId) => void toggleVersionPin(activeNote.id, versionId)}
+          onDelete={(versionId) => void deleteVersion(activeNote.id, versionId)}
+          onClear={() => void clearVersions(activeNote.id)}
+        />
+      )}
     </div>
   );
-}
-
-function clipboardItemToNoteContent(item: ClipboardItem): string {
-  if (item.kind === "rich" || item.kind === "image") return item.content;
-  if (item.kind === "code") {
-    return `<pre><code>${escapeHtml(item.content)}</code></pre>`;
-  }
-  const text = escapeHtml(item.content)
-    .split(/\r?\n/)
-    .map((line) => line || "<br>")
-    .join("</p><p>");
-  return `<p>${text}</p>`;
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
 }

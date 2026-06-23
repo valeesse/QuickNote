@@ -29,6 +29,8 @@ interface SidebarProps {
   onDeleteNote: (id: string) => void;
   onTogglePin: (id: string) => void;
   onReorderNotes: (orderedIds: string[], isPinned: boolean) => void;
+  onOpenTrash: () => void;
+  isTrashOpen: boolean;
   onSelectClipboardItem: (id: string) => void;
   onCreateNoteFromClipboard: (id: string) => void;
   userEmail: string;
@@ -57,6 +59,8 @@ export function Sidebar({
   onDeleteNote,
   onTogglePin,
   onReorderNotes,
+  onOpenTrash,
+  isTrashOpen,
   onSelectClipboardItem,
   onCreateNoteFromClipboard,
   userEmail,
@@ -346,7 +350,18 @@ export function Sidebar({
         />
       )}
 
-      <div className="flex items-center justify-between border-t border-gray-100 px-4 py-2">
+      <div className="flex items-center justify-between gap-2 border-t border-gray-100 px-4 py-2">
+        {viewMode === "notes" && (
+          <button
+            type="button"
+            onClick={onOpenTrash}
+            className={`focus-ring flex h-8 w-8 items-center justify-center rounded hover:bg-gray-100 ${isTrashOpen ? "text-blue-600" : "text-gray-500 hover:text-gray-700"}`}
+            title={isTrashOpen ? "收起回收站" : "回收站"}
+            aria-label={isTrashOpen ? "收起回收站" : "打开回收站"}
+          >
+            <Trash2 className="h-4 w-4" />
+          </button>
+        )}
         <p className="flex-1 text-center text-xs text-gray-400">
           {viewMode === "notes" ? `${notes.length} 条便签` : `${clipboardCount} 条记录`}
         </p>
