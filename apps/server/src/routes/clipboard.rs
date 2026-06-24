@@ -156,10 +156,23 @@ fn detect_kind(content: &str) -> String {
 fn looks_like_rich_clipboard(content: &str) -> bool {
     let lowered = content.to_ascii_lowercase();
     lowered.contains("<img ")
-        || lowered.contains("<p")
+        || lowered.contains("<table")
+        || lowered.contains("<ul")
+        || lowered.contains("<ol")
+        || lowered.contains("<li")
+        || lowered.contains("<pre")
+        || lowered.contains("<code")
+        || lowered.contains("<blockquote")
+        || lowered.contains("<figure")
         || lowered.contains("<br")
-        || lowered.contains("<div")
-        || lowered.contains("<span")
+        || count_html_block_tags(&lowered) > 1
+}
+
+fn count_html_block_tags(lowered: &str) -> usize {
+    ["<p", "<div", "<section", "<article", "<h1", "<h2", "<h3", "<h4", "<h5", "<h6"]
+        .iter()
+        .map(|needle| lowered.matches(needle).count())
+        .sum()
 }
 
 fn clipboard_preview(content: &str, kind: &str) -> String {

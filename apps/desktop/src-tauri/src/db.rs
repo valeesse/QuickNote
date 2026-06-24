@@ -1010,6 +1010,16 @@ impl Database {
     }
 
     pub fn capture_clipboard(&self, content: &str, source_device: &str) -> Result<ClipboardItem> {
+        let now = Utc::now().to_rfc3339();
+        self.capture_clipboard_at(content, source_device, &now)
+    }
+
+    pub fn capture_clipboard_at(
+        &self,
+        content: &str,
+        source_device: &str,
+        captured_at: &str,
+    ) -> Result<ClipboardItem> {
         let normalized = normalize_clipboard_content(content);
         if normalized.trim().is_empty() {
             return Err(rusqlite::Error::InvalidParameterName(
@@ -1027,7 +1037,6 @@ impl Database {
         );
         let kind = classify_clipboard_content(&normalized);
         let preview = clipboard_preview(&normalized, &kind);
-        let now = Utc::now().to_rfc3339();
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
         tx.execute(
@@ -1037,13 +1046,22 @@ impl Database {
              ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?6, ?6, 1, 0, 0)
              ON CONFLICT(id) DO UPDATE SET
                 source_device = excluded.source_device,
-                updated_at = excluded.updated_at,
-                last_copied_at = excluded.last_copied_at,
-                capture_count = clipboard_items.capture_count + 1,
+                updated_at = CASE
+                    WHEN excluded.last_copied_at > clipboard_items.last_copied_at THEN excluded.updated_at
+                    ELSE clipboard_items.updated_at
+                END,
+                last_copied_at = CASE
+                    WHEN excluded.last_copied_at > clipboard_items.last_copied_at THEN excluded.last_copied_at
+                    ELSE clipboard_items.last_copied_at
+                END,
+                capture_count = CASE
+                    WHEN excluded.last_copied_at > clipboard_items.last_copied_at THEN clipboard_items.capture_count + 1
+                    ELSE clipboard_items.capture_count
+                END,
                 is_deleted = 0",
-            params![id, kind, normalized, preview, source_device, now],
+            params![id, kind, normalized, preview, source_device, captured_at],
         )?;
-        enqueue_change(&tx, "clipboard", &id, "upsert", &now)?;
+        enqueue_change(&tx, "clipboard", &id, "upsert", captured_at)?;
         let item = get_clipboard_item_locked(&tx, &id, true)?.expect("inserted clipboard item");
         tx.commit()?;
         Ok(item)
@@ -1109,6 +1127,32 @@ impl Database {
         }
         tx.commit()?;
         Ok(changed > 0)
+    }
+
+    pub fn clear_clipboard_items(&self) -> Result<usize> {
+        let now = Utc::now().to_rfc3339();
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+
+        let ids = {
+            let mut stmt = tx.prepare("SELECT id FROM clipboard_items WHERE is_deleted = 0")?;
+            let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+            rows.collect::<Result<Vec<_>>>()?
+        };
+
+        let changed = tx.execute(
+            "UPDATE clipboard_items SET is_deleted = 1, updated_at = ?1 WHERE is_deleted = 0",
+            params![now],
+        )?;
+
+        if changed > 0 {
+            for id in &ids {
+                enqueue_change(&tx, "clipboard", id, "delete", &now)?;
+            }
+        }
+
+        tx.commit()?;
+        Ok(changed)
     }
 
     pub fn apply_remote_clipboard(
@@ -1318,10 +1362,25 @@ fn classify_clipboard_content(content: &str) -> String {
 fn looks_like_rich_clipboard(content: &str) -> bool {
     let lowered = content.to_ascii_lowercase();
     lowered.contains("<img ")
-        || lowered.contains("<p")
+        || lowered.contains("<table")
+        || lowered.contains("<ul")
+        || lowered.contains("<ol")
+        || lowered.contains("<li")
+        || lowered.contains("<pre")
+        || lowered.contains("<code")
+        || lowered.contains("<blockquote")
+        || lowered.contains("<figure")
         || lowered.contains("<br")
-        || lowered.contains("<div")
-        || lowered.contains("<span")
+        || count_html_block_tags(&lowered) > 1
+}
+
+fn count_html_block_tags(lowered: &str) -> usize {
+    [
+        "<p", "<div", "<section", "<article", "<h1", "<h2", "<h3", "<h4", "<h5", "<h6",
+    ]
+    .iter()
+    .map(|needle| lowered.matches(needle).count())
+    .sum()
 }
 
 fn clipboard_preview(content: &str, kind: &str) -> String {

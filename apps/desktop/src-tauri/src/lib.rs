@@ -37,7 +37,9 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
     let menu = Menu::with_items(
         app,
-        &[&show, &new_note, &clipboard, &sync_now, &autostart, &sep, &quit],
+        &[
+            &show, &new_note, &clipboard, &sync_now, &autostart, &sep, &quit,
+        ],
     )?;
 
     // Clone Arcs for the menu event closure (owned, not borrowed from app state)
@@ -231,13 +233,18 @@ pub fn run() {
             commands::cleanup_attachments,
             commands::get_sync_config,
             commands::set_sync_config,
+            commands::test_webdav_connection,
+            commands::test_cloud_connection,
             commands::sync_now,
             commands::clipboard_auto_capture_supported,
+            commands::sync_clipboard_history,
             commands::capture_clipboard,
+            commands::prime_clipboard_capture,
             commands::list_clipboard_items,
             commands::copy_clipboard_item,
             commands::toggle_clipboard_pin,
             commands::delete_clipboard_item,
+            commands::clear_clipboard,
             shortcuts::get_shortcut_config,
             shortcuts::set_shortcut_config,
         ])

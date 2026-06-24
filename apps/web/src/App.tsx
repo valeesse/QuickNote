@@ -11,6 +11,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useNotes } from "@/hooks/useNotes";
 import { useClipboard } from "@/hooks/useClipboard";
 import { useCloudEvents } from "@/hooks/useCloudEvents";
+import { attachmentsApi } from "@/api/client";
 import { LogOut, RefreshCw, Search, Trash2, X } from "lucide-react";
 import type { AppView } from "@/types";
 
@@ -74,6 +75,11 @@ function MainApp({ userEmail, onLogout }: { userEmail: string; onLogout: () => v
   } | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const refreshTaskRef = useRef<Promise<void> | null>(null);
+
+  const resolveClipboardAttachment = React.useCallback(async (id: string) => {
+    const blob = await attachmentsApi.download(id);
+    return URL.createObjectURL(blob);
+  }, []);
 
   const refreshCloudData = React.useCallback(async ({ showIndicator = false }: { showIndicator?: boolean } = {}) => {
     if (refreshTaskRef.current) return refreshTaskRef.current;
@@ -226,6 +232,7 @@ function MainApp({ userEmail, onLogout }: { userEmail: string; onLogout: () => v
             onDelete={clipboard.deleteItem}
             focusedItemId={focusedClipboardItemId}
             onCreateNoteFromItem={(id) => void handleCreateNoteFromClipboard(id)}
+            resolveAttachmentSrc={resolveClipboardAttachment}
           />
         ) : (
           <>

@@ -73,13 +73,27 @@ export function useSync({
     }
   }, []);
 
+  const testWebdav = useCallback(async (endpoint: string, username: string, password: string) => {
+    await invoke<void>("test_webdav_connection", { endpoint, username, password });
+  }, []);
+
+  const testCloud = useCallback(async (cloudUrl: string, cloudEmail: string, cloudPassword: string) => {
+    await invoke<void>("test_cloud_connection", { cloudUrl, cloudEmail, cloudPassword });
+  }, []);
+
   const saveConfig = useCallback(async (input: SyncConfigInput) => {
-    const next = await invoke<SyncConfig>("set_sync_config", { config: input });
-    configRef.current = next;
-    setConfig(next);
-    setStatus(next.enabled || next.cloud_enabled ? "idle" : "disabled");
-    setError(null);
-    return next;
+    try {
+      const next = await invoke<SyncConfig>("set_sync_config", { config: input });
+      configRef.current = next;
+      setConfig(next);
+      setStatus(next.enabled || next.cloud_enabled ? "idle" : "disabled");
+      setError(null);
+      return next;
+    } catch (err) {
+      setError(getErrorMessage(err));
+      setStatus("error");
+      throw err;
+    }
   }, []);
 
   useEffect(() => {
@@ -104,6 +118,8 @@ export function useSync({
     error,
     lastReport,
     saveConfig,
+    testWebdav,
+    testCloud,
     syncNow,
   };
 }

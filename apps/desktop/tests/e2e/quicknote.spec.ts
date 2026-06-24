@@ -84,6 +84,7 @@ test.beforeEach(async ({ page }) => {
         }
         if (cmd === "cleanup_attachments") return 0;
         if (cmd === "clipboard_auto_capture_supported") return true;
+        if (cmd === "prime_clipboard_capture") return true;
         if (cmd === "capture_clipboard") {
           const content = localStorage.getItem("quicknote-e2e-system-clipboard") || "";
           if (!content.trim()) return null;

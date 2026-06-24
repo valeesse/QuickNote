@@ -204,4 +204,9 @@ impl SyncProvider for CloudProvider {
             ))
         }
     }
+
+    async fn delete(&self, _path: &str) -> Result<(), String> {
+        // Cloud server manages its own lifecycle; no-op for change file cleanup.
+        Ok(())
+    }
 }

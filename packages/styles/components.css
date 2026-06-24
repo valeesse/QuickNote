@@ -297,6 +297,16 @@
   transform: translateY(-2px);
 }
 
+.clipboard-card--compact {
+  min-height: 112px;
+  border-radius: 10px;
+  padding: 10px;
+}
+
+.clipboard-card--compact:hover {
+  transform: none;
+}
+
 .clipboard-card--focused {
   border-color: #a78bfa;
   box-shadow: 0 0 0 3px rgb(167 139 250 / 0.22), 0 8px 20px rgb(15 23 42 / 0.08);
@@ -369,6 +379,15 @@
   max-height: 180px;
   border-radius: 10px;
   object-fit: cover;
+}
+
+.clipboard-card--compact .clipboard-card__copy {
+  min-height: 48px;
+  margin-top: 6px;
+}
+
+.clipboard-card--compact .clipboard-card__rich :where(img) {
+  max-height: 120px;
 }
 
 .clipboard-card__rich :where(a) {

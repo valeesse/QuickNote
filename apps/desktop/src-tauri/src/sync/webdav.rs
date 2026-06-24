@@ -177,6 +177,24 @@ impl SyncProvider for WebDavProvider {
         }
         Err(format!("WebDAV PUT {} failed: {}", path, response.status()))
     }
+
+    async fn delete(&self, path: &str) -> Result<(), String> {
+        let response = self
+            .client
+            .delete(self.url(path))
+            .basic_auth(&self.username, Some(&self.password))
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        if response.status().is_success() || response.status() == StatusCode::NOT_FOUND {
+            return Ok(());
+        }
+        Err(format!(
+            "WebDAV DELETE {} failed: {}",
+            path,
+            response.status()
+        ))
+    }
 }
 
 #[cfg(test)]

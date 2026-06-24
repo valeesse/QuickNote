@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { clipboardApi } from "@/api/client";
+import { attachmentsApi, clipboardApi } from "@/api/client";
 import type { ClipboardItem } from "@/types";
 
 export function useClipboard() {
@@ -113,16 +113,18 @@ async function readClipboardPayload(): Promise<{ content: string; kind?: string 
         if (item.types.includes("text/html")) {
           const blob = await item.getType("text/html");
           const html = await blob.text();
-          if (html.trim()) return { content: html, kind: "rich" };
+          if (isVisualClipboardHtml(html)) return { content: html, kind: "rich" };
         }
       }
       for (const item of items) {
         const imageType = item.types.find((type) => type.startsWith("image/"));
         if (imageType) {
           const blob = await item.getType(imageType);
-          const dataUrl = await blobToDataUrl(blob);
+          const bytes = new Uint8Array(await blob.arrayBuffer());
+          const id = await sha256(bytes);
+          await attachmentsApi.upload(id, bytes, blob.type || imageType);
           return {
-            content: `<img src="${dataUrl}" alt="剪贴板图片" title="剪贴板图片">`,
+            content: `<img src="attachment://${id}" data-attachment-id="${id}" alt="剪贴板图片" title="剪贴板图片">`,
             kind: "image",
           };
         }
@@ -148,11 +150,17 @@ function isClipboardFocusError(error: unknown): boolean {
   return message.includes("Document is not focused") || message.includes("document is not focused");
 }
 
-function blobToDataUrl(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ""));
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(blob);
-  });
+function isVisualClipboardHtml(html: string): boolean {
+  const lowered = html.trim().toLowerCase();
+  if (!lowered) return false;
+  if (/<img[\s>]/.test(lowered)) return true;
+  if (/<(table|ul|ol|li|pre|code|blockquote|figure)[\s>]/.test(lowered)) return true;
+  if (/<br\s*\/?>/.test(lowered)) return true;
+  const blockMatches = lowered.match(/<(p|div|section|article|h[1-6])[\s>]/g);
+  return (blockMatches?.length ?? 0) > 1;
+}
+
+async function sha256(bytes: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", bytes as BufferSource);
+  return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, "0")).join("");
 }

@@ -5,6 +5,11 @@ use crate::db::{AttachmentRecord, CausalVersion, Database, SyncChange};
 use async_trait::async_trait;
 pub use quicknote_protocol::SyncEnvelope;
 use serde::{Deserialize, Serialize};
+use aes_gcm::{
+    aead::{rand_core::RngCore, Aead, KeyInit, OsRng},
+    Aes256Gcm, Nonce,
+};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use sha2::{Digest, Sha256};
 use std::path::Component;
 use std::path::{Path, PathBuf};
@@ -31,6 +36,14 @@ pub struct SyncConfig {
     pub cloud_cursor_seq: i64,
     #[serde(default)]
     pub cloud_token_created_at: i64,
+    #[serde(default)]
+    pub password_salt: Option<String>,
+    #[serde(default)]
+    pub webdav_password_encrypted: Option<String>,
+    #[serde(default)]
+    pub cloud_password_encrypted: Option<String>,
+    #[serde(default)]
+    pub cloud_token_encrypted: Option<String>,
 }
 
 impl Default for SyncConfig {
@@ -46,6 +59,10 @@ impl Default for SyncConfig {
             cloud_email: String::new(),
             cloud_cursor_seq: 0,
             cloud_token_created_at: 0,
+            password_salt: None,
+            webdav_password_encrypted: None,
+            cloud_password_encrypted: None,
+            cloud_token_encrypted: None,
         }
     }
 }
@@ -79,6 +96,7 @@ pub trait SyncProvider: Send + Sync {
     async fn list(&self, path: &str) -> Result<Vec<String>, String>;
     async fn get(&self, path: &str) -> Result<Option<Vec<u8>>, String>;
     async fn put(&self, path: &str, body: Vec<u8>, content_type: &str) -> Result<(), String>;
+    async fn delete(&self, path: &str) -> Result<(), String>;
 }
 
 pub struct SyncService {
@@ -111,45 +129,99 @@ impl SyncService {
         if input.provider != PROVIDER_NAME && !input.provider.is_empty() {
             return Err(format!("Unsupported sync provider: {}", input.provider));
         }
+        let endpoint = input.endpoint.trim().trim_end_matches('/').to_string();
+        let username = input.username.trim().to_string();
+        let cloud_url = input.cloud_url.trim().trim_end_matches('/').to_string();
+        let cloud_email = input.cloud_email.trim().to_string();
         if input.enabled
-            && (!input.endpoint.starts_with("https://") || input.username.trim().is_empty())
+            && (!endpoint.starts_with("https://") && !endpoint.starts_with("http://")
+                || username.is_empty())
         {
-            return Err("WebDAV sync requires an HTTPS endpoint and username".to_string());
+            return Err("WebDAV sync requires an HTTP(S) endpoint and username".to_string());
         }
         if input.cloud_enabled && input.enabled {
             return Err("Cloud mode and direct WebDAV mode are mutually exclusive".to_string());
         }
         if input.cloud_enabled
-            && (!input.cloud_url.starts_with("https://") || input.cloud_email.trim().is_empty())
+            && (!cloud_url.starts_with("https://") && !cloud_url.starts_with("http://")
+                || cloud_email.is_empty())
         {
-            return Err("Cloud sync requires an HTTPS URL and email".to_string());
+            return Err("Cloud sync requires an HTTP(S) URL and email".to_string());
         }
 
         let existing = self.get_config().unwrap_or_default();
-        let config = SyncConfig {
+        let webdav_identity_changed =
+            existing.endpoint != endpoint || existing.username != username;
+        let cloud_identity_changed =
+            existing.cloud_url != cloud_url || existing.cloud_email != cloud_email;
+        let mut config = SyncConfig {
             enabled: input.enabled,
             provider: input.provider,
-            endpoint: input.endpoint.trim_end_matches('/').to_string(),
-            username: input.username.trim().to_string(),
-            device_id: existing.device_id,
+            endpoint,
+            username,
+            device_id: existing.device_id.clone(),
             cloud_enabled: input.cloud_enabled,
-            cloud_url: input.cloud_url.trim_end_matches('/').to_string(),
-            cloud_email: input.cloud_email.trim().to_string(),
-            cloud_cursor_seq: existing.cloud_cursor_seq,
-            cloud_token_created_at: existing.cloud_token_created_at,
+            cloud_url,
+            cloud_email,
+            cloud_cursor_seq: if cloud_identity_changed {
+                0
+            } else {
+                existing.cloud_cursor_seq
+            },
+            cloud_token_created_at: if cloud_identity_changed {
+                0
+            } else {
+                existing.cloud_token_created_at
+            },
+            password_salt: existing.password_salt.clone(),
+            webdav_password_encrypted: existing.webdav_password_encrypted.clone(),
+            cloud_password_encrypted: existing.cloud_password_encrypted.clone(),
+            cloud_token_encrypted: existing.cloud_token_encrypted.clone(),
         };
         if let Some(password) = input.password.filter(|value| !value.is_empty()) {
-            keyring_entry(&config)?
-                .set_password(&password)
-                .map_err(|e| e.to_string())?;
-        }
-        // Store cloud password in keyring if provided
-        if let Some(cloud_pw) = input.cloud_password.filter(|v| !v.is_empty()) {
-            if !config.cloud_url.is_empty() && !config.cloud_email.is_empty() {
-                cloud_password_entry(&config)?
-                    .set_password(&cloud_pw)
-                    .map_err(|e| format!("Failed to store cloud credentials: {e}"))?;
+            store_webdav_password(&mut config, &password)?;
+        } else if config.enabled {
+            if webdav_identity_changed {
+                if let Ok(old_password) = get_webdav_password(&existing) {
+                    store_webdav_password(&mut config, &old_password)?;
+                } else {
+                    return Err(
+                        "WebDAV endpoint or username changed; please re-enter the password"
+                            .to_string(),
+                    );
+                }
+            } else {
+                get_webdav_password(&config)?;
             }
+        }
+        let has_new_cloud_password = input
+            .cloud_password
+            .as_deref()
+            .is_some_and(|value| !value.is_empty());
+        if let Some(cloud_pw) = input
+            .cloud_password
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            if !config.cloud_url.is_empty() && !config.cloud_email.is_empty() {
+                store_cloud_password(&mut config, cloud_pw)?;
+                delete_cloud_token(&mut config);
+            }
+        } else if config.cloud_enabled {
+            if cloud_identity_changed {
+                if let Ok(old_password) = get_cloud_password(&existing) {
+                    store_cloud_password(&mut config, &old_password)?;
+                } else {
+                    return Err(
+                        "Cloud account changed; please re-enter the cloud password".to_string(),
+                    );
+                }
+            } else {
+                get_cloud_password(&config)?;
+            }
+        }
+        if cloud_identity_changed && !has_new_cloud_password {
+            delete_cloud_token(&mut config);
         }
         let data = serde_json::to_vec_pretty(&config).map_err(|e| e.to_string())?;
         std::fs::write(&self.config_path, data)
@@ -245,9 +317,7 @@ impl SyncService {
         attachments_dir: &Path,
         config: &SyncConfig,
     ) -> Result<(usize, (usize, usize)), String> {
-        let password = keyring_entry(config)?
-            .get_password()
-            .map_err(|_| "WebDAV password is missing; save sync settings again".to_string())?;
+        let password = get_webdav_password(config)?;
         let provider = WebDavProvider::new(&config.endpoint, &config.username, &password)?;
         provider.prepare(&config.device_id).await?;
         db.ensure_sync_bootstrap(&format!("{}:{}", config.provider, config.endpoint))
@@ -261,18 +331,14 @@ impl SyncService {
     async fn get_cloud_token(&self, config: &mut SyncConfig) -> Result<String, String> {
         let now = chrono::Utc::now().timestamp();
         if now - config.cloud_token_created_at < 6 * 24 * 60 * 60 {
-            if let Ok(token) = cloud_token_entry(config)?.get_password() {
+            if let Ok(token) = get_cloud_token_from_config(config) {
                 return Ok(token);
             }
         }
-        let password = cloud_password_entry(config)?
-            .get_password()
-            .map_err(|_| "Cloud password is missing; save cloud settings again".to_string())?;
+        let password = get_cloud_password(config)?;
         let login =
             cloud::CloudProvider::login(&config.cloud_url, &config.cloud_email, &password).await?;
-        cloud_token_entry(config)?
-            .set_password(&login.token)
-            .map_err(|error| error.to_string())?;
+        store_cloud_token(config, &login.token)?;
         config.cloud_token_created_at = now;
         Ok(login.token)
     }
@@ -283,20 +349,157 @@ impl SyncService {
             .map_err(|e| format!("Failed to save sync config: {e}"))?;
         Ok(())
     }
+
+    /// Test the stored WebDAV connection using the saved encrypted password.
+    pub async fn test_stored_webdav(&self) -> Result<(), String> {
+        let config = self.get_config()?;
+        if !config.enabled {
+            return Err("WebDAV sync is not enabled".to_string());
+        }
+        let password = get_webdav_password(&config)?;
+        test_webdav_connection(&config.endpoint, &config.username, &password).await
+    }
 }
 
-fn keyring_entry(config: &SyncConfig) -> Result<keyring::Entry, String> {
-    keyring::Entry::new("com.quicknote.desktop.sync", &config.device_id).map_err(|e| e.to_string())
+/// Test a WebDAV connection by issuing a PROPFIND on the root endpoint.
+pub async fn test_webdav_connection(
+    endpoint: &str,
+    username: &str,
+    password: &str,
+) -> Result<(), String> {
+    let provider = webdav::WebDavProvider::new(endpoint, username, password)?;
+    // PROPFIND on the root — a 207 or 200 means the server accepted our credentials.
+    let _items = provider.list("").await?;
+    Ok(())
 }
 
-fn cloud_password_entry(config: &SyncConfig) -> Result<keyring::Entry, String> {
-    keyring::Entry::new("com.quicknote.desktop.cloud.password", &config.cloud_email)
-        .map_err(|e| e.to_string())
+/// Test a cloud connection by attempting a login.
+pub async fn test_cloud_connection(
+    cloud_url: &str,
+    cloud_email: &str,
+    cloud_password: &str,
+) -> Result<(), String> {
+    cloud::CloudProvider::login(cloud_url, cloud_email, cloud_password).await?;
+    Ok(())
 }
 
-fn cloud_token_entry(config: &SyncConfig) -> Result<keyring::Entry, String> {
-    keyring::Entry::new("com.quicknote.desktop.cloud.token", &config.cloud_email)
-        .map_err(|e| e.to_string())
+// ---------------------------------------------------------------------------
+// AES-256-GCM encrypted credential storage (replaces keyring)
+// ---------------------------------------------------------------------------
+
+fn derive_encryption_key(device_id: &str, salt: &[u8]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(device_id.as_bytes());
+    hasher.update([0]);
+    hasher.update(salt);
+    hasher.finalize().into()
+}
+
+fn encrypt_value(plaintext: &str, key: &[u8; 32]) -> Result<String, String> {
+    let cipher =
+        Aes256Gcm::new_from_slice(key).map_err(|e| format!("Encryption init failed: {e}"))?;
+    let mut nonce_bytes = [0u8; 12];
+    OsRng.fill_bytes(&mut nonce_bytes);
+    let nonce = Nonce::from_slice(&nonce_bytes);
+    let ciphertext = cipher
+        .encrypt(nonce, plaintext.as_bytes())
+        .map_err(|e| format!("Encryption failed: {e}"))?;
+    let mut combined = Vec::with_capacity(12 + ciphertext.len());
+    combined.extend_from_slice(&nonce_bytes);
+    combined.extend_from_slice(&ciphertext);
+    Ok(BASE64.encode(&combined))
+}
+
+fn decrypt_value(encoded: &str, key: &[u8; 32]) -> Result<String, String> {
+    let combined = BASE64
+        .decode(encoded)
+        .map_err(|e| format!("Base64 decode failed: {e}"))?;
+    if combined.len() < 13 {
+        return Err("Encrypted value is too short".to_string());
+    }
+    let (nonce_bytes, ciphertext) = combined.split_at(12);
+    let cipher =
+        Aes256Gcm::new_from_slice(key).map_err(|e| format!("Decryption init failed: {e}"))?;
+    let nonce = Nonce::from_slice(nonce_bytes);
+    let plaintext = cipher
+        .decrypt(nonce, ciphertext)
+        .map_err(|e| format!("Decryption failed (key may have changed): {e}"))?;
+    String::from_utf8(plaintext).map_err(|e| format!("Decrypted value is not valid UTF-8: {e}"))
+}
+
+fn ensure_salt(config: &mut SyncConfig) -> Vec<u8> {
+    if let Some(ref salt_b64) = config.password_salt {
+        if let Ok(salt) = BASE64.decode(salt_b64) {
+            return salt;
+        }
+    }
+    let mut salt = [0u8; 16];
+    OsRng.fill_bytes(&mut salt);
+    config.password_salt = Some(BASE64.encode(salt));
+    salt.to_vec()
+}
+
+fn encryption_key_for(config: &SyncConfig) -> Result<[u8; 32], String> {
+    let salt_b64 = config
+        .password_salt
+        .as_ref()
+        .ok_or_else(|| "Encryption salt is missing".to_string())?;
+    let salt_bytes = BASE64
+        .decode(salt_b64)
+        .map_err(|e| format!("Invalid salt: {e}"))?;
+    Ok(derive_encryption_key(&config.device_id, &salt_bytes))
+}
+
+fn store_webdav_password(config: &mut SyncConfig, password: &str) -> Result<(), String> {
+    let salt = ensure_salt(config);
+    let key = derive_encryption_key(&config.device_id, &salt);
+    config.webdav_password_encrypted = Some(encrypt_value(password, &key)?);
+    Ok(())
+}
+
+fn get_webdav_password(config: &SyncConfig) -> Result<String, String> {
+    let encrypted = config
+        .webdav_password_encrypted
+        .as_ref()
+        .ok_or_else(|| "WebDAV password is missing; save sync settings again".to_string())?;
+    let key = encryption_key_for(config)?;
+    decrypt_value(encrypted, &key)
+}
+
+fn store_cloud_password(config: &mut SyncConfig, password: &str) -> Result<(), String> {
+    let salt = ensure_salt(config);
+    let key = derive_encryption_key(&config.device_id, &salt);
+    config.cloud_password_encrypted = Some(encrypt_value(password, &key)?);
+    Ok(())
+}
+
+fn get_cloud_password(config: &SyncConfig) -> Result<String, String> {
+    let encrypted = config
+        .cloud_password_encrypted
+        .as_ref()
+        .ok_or_else(|| "Cloud password is missing; save cloud settings again".to_string())?;
+    let key = encryption_key_for(config)?;
+    decrypt_value(encrypted, &key)
+}
+
+fn store_cloud_token(config: &mut SyncConfig, token: &str) -> Result<(), String> {
+    let salt = ensure_salt(config);
+    let key = derive_encryption_key(&config.device_id, &salt);
+    config.cloud_token_encrypted = Some(encrypt_value(token, &key)?);
+    Ok(())
+}
+
+fn get_cloud_token_from_config(config: &SyncConfig) -> Result<String, String> {
+    let encrypted = config
+        .cloud_token_encrypted
+        .as_ref()
+        .ok_or_else(|| "Cloud token is missing".to_string())?;
+    let key = encryption_key_for(config)?;
+    decrypt_value(encrypted, &key)
+}
+
+fn delete_cloud_token(config: &mut SyncConfig) {
+    config.cloud_token_encrypted = None;
 }
 
 async fn push_changes(
@@ -402,8 +605,8 @@ async fn pull_changes(
             .map_err(|e| e.to_string())?;
         let mut files = provider.list(&format!("changes/{device_id}")).await?;
         files.sort();
-        for file in files {
-            let Some(seq) = parse_change_sequence(&file) else {
+        for file in &files {
+            let Some(seq) = parse_change_sequence(file) else {
                 continue;
             };
             if seq <= cursor {
@@ -428,6 +631,16 @@ async fn pull_changes(
             cursor = seq;
             db.set_sync_cursor(&cursor_scope, &device_id, cursor)
                 .map_err(|e| e.to_string())?;
+        }
+        // Clean up remote change files that have been fully processed
+        for file in &files {
+            if let Some(seq) = parse_change_sequence(file) {
+                if seq <= cursor {
+                    let path = format!("changes/{device_id}/{file}");
+                    // Best-effort deletion — do not fail the sync if cleanup errors.
+                    let _ = provider.delete(&path).await;
+                }
+            }
         }
     }
     Ok((pulled, conflicts))
@@ -651,6 +864,11 @@ mod tests {
             }
             Ok(())
         }
+
+        async fn delete(&self, path: &str) -> Result<(), String> {
+            self.objects.lock().unwrap().remove(path);
+            Ok(())
+        }
     }
 
     fn config(device_id: &str) -> SyncConfig {
@@ -665,6 +883,10 @@ mod tests {
             cloud_email: String::new(),
             cloud_cursor_seq: 0,
             cloud_token_created_at: 0,
+            password_salt: None,
+            webdav_password_encrypted: None,
+            cloud_password_encrypted: None,
+            cloud_token_encrypted: None,
         }
     }
 
@@ -809,6 +1031,52 @@ mod tests {
             .is_err());
         let scope = format!("{}:{}", sync_config.provider, sync_config.endpoint);
         assert_eq!(db.get_sync_cursor(&scope, "device-b").unwrap(), 0);
+    }
+
+    #[test]
+    fn encrypt_decrypt_round_trip() {
+        let mut cfg = SyncConfig::default();
+        let salt = ensure_salt(&mut cfg);
+        let key = derive_encryption_key(&cfg.device_id, &salt);
+        let encrypted = encrypt_value("my-secret-password", &key).unwrap();
+        let decrypted = decrypt_value(&encrypted, &key).unwrap();
+        assert_eq!(decrypted, "my-secret-password");
+    }
+
+    #[test]
+    fn different_nonces_produce_different_ciphertexts() {
+        let mut cfg = SyncConfig::default();
+        let salt = ensure_salt(&mut cfg);
+        let key = derive_encryption_key(&cfg.device_id, &salt);
+        let e1 = encrypt_value("same-password", &key).unwrap();
+        let e2 = encrypt_value("same-password", &key).unwrap();
+        assert_ne!(e1, e2);
+    }
+
+    #[test]
+    fn wrong_key_fails_decryption() {
+        let mut cfg = SyncConfig::default();
+        let salt = ensure_salt(&mut cfg);
+        let key = derive_encryption_key(&cfg.device_id, &salt);
+        let encrypted = encrypt_value("secret", &key).unwrap();
+        let wrong_key = derive_encryption_key("wrong-device-id", &salt);
+        assert!(decrypt_value(&encrypted, &wrong_key).is_err());
+    }
+
+    #[test]
+    fn store_and_retrieve_webdav_password() {
+        let mut cfg = SyncConfig::default();
+        store_webdav_password(&mut cfg, "test-password").unwrap();
+        assert_eq!(get_webdav_password(&cfg).unwrap(), "test-password");
+    }
+
+    #[test]
+    fn password_survives_json_round_trip() {
+        let mut cfg = SyncConfig::default();
+        store_webdav_password(&mut cfg, "persistent-pw").unwrap();
+        let json = serde_json::to_string(&cfg).unwrap();
+        let restored: SyncConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(get_webdav_password(&restored).unwrap(), "persistent-pw");
     }
 
     #[tokio::test]

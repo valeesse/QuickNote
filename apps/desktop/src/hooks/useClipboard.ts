@@ -57,6 +57,12 @@ export function useClipboard() {
     await loadItems();
   }, [loadItems]);
 
+  const clearClipboard = useCallback(async () => {
+    await invoke<number>("clear_clipboard");
+    await invoke<boolean>("prime_clipboard_capture");
+    await loadItems();
+  }, [loadItems]);
+
   useEffect(() => {
     const timer = setTimeout(() => void loadItems(), query ? 180 : 0);
     return () => clearTimeout(timer);
@@ -66,9 +72,9 @@ export function useClipboard() {
     if (!isTauri()) return;
     void invoke<boolean>("clipboard_auto_capture_supported").then((supported) => {
       setAutoCaptureSupported(supported);
-      if (supported) void capture(true);
+      if (supported) void invoke<boolean>("prime_clipboard_capture");
     });
-  }, [capture]);
+  }, []);
 
   useEffect(() => {
     if (!autoCaptureSupported || !autoCaptureEnabled) return;
@@ -102,6 +108,7 @@ export function useClipboard() {
     copyItem,
     togglePin,
     deleteItem,
+    clearClipboard,
     loadItems,
   };
 }

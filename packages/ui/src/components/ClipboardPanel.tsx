@@ -26,6 +26,8 @@ interface ClipboardPanelProps {
   focusedItemId?: string | null;
   /** Desktop-only: create a note from this clipboard item. */
   onCreateNoteFromItem?: (id: string) => void;
+  /** Resolve attachment:// images before rendering clipboard HTML. */
+  resolveAttachmentSrc?: (id: string) => Promise<string>;
 }
 
 export function ClipboardPanel({
@@ -44,6 +46,7 @@ export function ClipboardPanel({
   description = "跨设备共享的剪贴板历史",
   focusedItemId,
   onCreateNoteFromItem,
+  resolveAttachmentSrc,
 }: ClipboardPanelProps) {
   const [capturing, setCapturing] = useState(false);
   const [captureMessage, setCaptureMessage] = useState<string | null>(null);
@@ -152,6 +155,7 @@ export function ClipboardPanel({
                   onTogglePin={onTogglePin ? () => onTogglePin(item.id) : undefined}
                   onDelete={() => onDelete(item.id)}
                   onCreateNote={onCreateNoteFromItem ? () => onCreateNoteFromItem(item.id) : undefined}
+                  resolveAttachmentSrc={resolveAttachmentSrc}
                 />
               ))}
             </div>
@@ -162,22 +166,26 @@ export function ClipboardPanel({
   );
 }
 
-const ClipboardCard = React.forwardRef<HTMLElement, {
+export const ClipboardCard = React.forwardRef<HTMLElement, {
   item: ClipboardItem;
   focused: boolean;
   copied: boolean;
+  compact?: boolean;
   onCopy: () => void;
   onTogglePin?: () => void;
   onDelete: () => void;
   onCreateNote?: () => void;
+  resolveAttachmentSrc?: (id: string) => Promise<string>;
 }>(function ClipboardCard({
   item,
   focused,
   copied,
+  compact,
   onCopy,
   onTogglePin,
   onDelete,
   onCreateNote,
+  resolveAttachmentSrc,
 }, ref) {
   const palette =
     item.kind === "link"
@@ -198,11 +206,15 @@ const ClipboardCard = React.forwardRef<HTMLElement, {
             ? "图文"
             : "文本";
   const isRich = item.kind === "rich" || item.kind === "image";
+  const renderedHtml = useHydratedClipboardHtml(
+    isRich ? item.content : "",
+    resolveAttachmentSrc,
+  );
 
   return (
     <article
       ref={ref}
-      className={`clipboard-card group ${focused ? "clipboard-card--focused" : ""}`}
+      className={`clipboard-card group ${compact ? "clipboard-card--compact" : ""} ${focused ? "clipboard-card--focused" : ""}`}
       onContextMenu={(event) => {
         if (!onCreateNote) return;
         event.preventDefault();
@@ -241,7 +253,7 @@ const ClipboardCard = React.forwardRef<HTMLElement, {
         {isRich ? (
           <div
             className="clipboard-card__rich line-clamp-4"
-            dangerouslySetInnerHTML={{ __html: sanitizeClipboardHtml(item.content) }}
+            dangerouslySetInnerHTML={{ __html: renderedHtml }}
           />
         ) : (
           <p
@@ -269,6 +281,62 @@ const ClipboardCard = React.forwardRef<HTMLElement, {
     </article>
   );
 });
+
+function useHydratedClipboardHtml(
+  html: string,
+  resolveAttachmentSrc?: (id: string) => Promise<string>,
+): string {
+  const [renderedHtml, setRenderedHtml] = useState(() => sanitizeClipboardHtml(html));
+
+  useEffect(() => {
+    let disposed = false;
+    let objectUrls: string[] = [];
+
+    async function hydrate() {
+      const nextHtml = resolveAttachmentSrc
+        ? await hydrateAttachmentReferences(html, resolveAttachmentSrc, (url) => {
+            if (disposed) URL.revokeObjectURL(url);
+            else objectUrls.push(url);
+          })
+        : html;
+      if (!disposed) setRenderedHtml(sanitizeClipboardHtml(nextHtml));
+    }
+
+    void hydrate();
+    return () => {
+      disposed = true;
+      for (const url of objectUrls) URL.revokeObjectURL(url);
+      objectUrls = [];
+    };
+  }, [html, resolveAttachmentSrc]);
+
+  return renderedHtml;
+}
+
+async function hydrateAttachmentReferences(
+  html: string,
+  resolveAttachmentSrc: (id: string) => Promise<string>,
+  trackObjectUrl: (url: string) => void,
+): Promise<string> {
+  if (!html.includes("attachment://") || typeof document === "undefined") return html;
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  const images = Array.from(doc.querySelectorAll<HTMLImageElement>("img[src^='attachment://']"));
+  await Promise.all(images.map(async (image) => {
+    const id = image.getAttribute("src")?.slice("attachment://".length);
+    if (!id) return;
+    try {
+      const src = await resolveAttachmentSrc(id);
+      if (!src) return;
+      image.src = src;
+      image.dataset.attachmentId = id;
+      if (src.startsWith("blob:")) trackObjectUrl(src);
+    } catch {
+      image.removeAttribute("src");
+      image.alt = image.alt || "附件缺失";
+    }
+  }));
+  return doc.body.innerHTML;
+}
 
 function shortDevice(device: string): string {
   return device ? `设备 ${device.slice(0, 6)}` : "本机";
@@ -326,6 +394,7 @@ function isSafeClipboardUrl(value: string): boolean {
     value.startsWith("data:image/") ||
     value.startsWith("https://") ||
     value.startsWith("http://") ||
+    value.startsWith("asset:") ||
     value.startsWith("blob:")
   );
 }

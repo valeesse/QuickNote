@@ -26,12 +26,18 @@ async-trait = "0.1"
 quick-xml = "0.38"
 percent-encoding = "2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-keyring = "3"
+aes-gcm = "0.10"
 quicknote-protocol = { path = "../../../crates/quicknote-protocol" }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-autostart = "2.5.1"
 tauri-plugin-global-shortcut = "2"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62", features = [
+  "ApplicationModel_DataTransfer",
+  "Foundation",
+] }
 
 [features]
 default = ["custom-protocol"]

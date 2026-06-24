@@ -1,7 +1,7 @@
 // Shared UI components
 export { Toolbar, ToolbarButton, ToolbarDivider } from "./components/Toolbar";
 export { InlineMarkdownMarkRules } from "./components/MarkdownRules";
-export { ClipboardPanel } from "./components/ClipboardPanel";
+export { ClipboardPanel, ClipboardCard } from "./components/ClipboardPanel";
 export { EmptyState } from "./components/EmptyState";
 export { EditorSkeleton } from "./components/EditorSkeleton";
 export { NoteCard, NoteSectionLabel } from "./components/NoteCard";

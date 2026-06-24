@@ -1,8 +1,10 @@
 import { useEffect, useCallback, useState } from "react";
 import { useClipboard } from "@/hooks/useClipboard";
+import { isTauri, invoke } from "@/utils/tauri";
 import { hideCurrentWindow } from "@/utils/window";
-import { formatRelativeTime } from "@ui/utils/format";
-import { Pin, PinOff, Copy, Clipboard, X } from "lucide-react";
+import { ClipboardCard } from "@ui/components/ClipboardPanel";
+import { convertFileSrc } from "@tauri-apps/api/core";
+import { Clipboard, Trash2, X } from "lucide-react";
 
 export function ClipboardPopup() {
   const {
@@ -14,10 +16,12 @@ export function ClipboardPopup() {
     copyItem,
     togglePin,
     deleteItem,
+    clearClipboard,
     loadItems,
     error,
   } = useClipboard();
   const [capturing, setCapturing] = useState(false);
+  const [clearing, setClearing] = useState(false);
   const [captureMessage, setCaptureMessage] = useState<string | null>(null);
 
   // Hide window on blur
@@ -85,6 +89,22 @@ export function ClipboardPopup() {
     }
   }, [capture, capturing, loadItems]);
 
+  const handleClear = useCallback(async () => {
+    if (clearing) return;
+    const confirmed = window.confirm("清空本应用剪贴板历史？");
+    if (!confirmed) return;
+
+    setClearing(true);
+    setCaptureMessage(null);
+    try {
+      await clearClipboard();
+      setCaptureMessage("已清空");
+      window.setTimeout(() => setCaptureMessage(null), 1_500);
+    } finally {
+      setClearing(false);
+    }
+  }, [clearClipboard, clearing]);
+
   const handleCopy = useCallback(async (id: string) => {
     await copyItem(id);
     // Close popup after copying
@@ -112,6 +132,16 @@ export function ClipboardPopup() {
           className="rounded-lg bg-gray-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-black disabled:cursor-not-allowed disabled:opacity-60"
         >
           {capturing ? "读取中..." : "读取剪贴板"}
+        </button>
+        <button
+          type="button"
+          onClick={() => void handleClear()}
+          disabled={clearing}
+          className="rounded-lg p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-500 disabled:cursor-not-allowed disabled:opacity-60"
+          title="清空剪贴板"
+          aria-label="清空剪贴板"
+        >
+          <Trash2 className="h-4 w-4" />
         </button>
         <button
           type="button"
@@ -144,67 +174,27 @@ export function ClipboardPopup() {
         ) : (
           <div className="space-y-2">
             {items.map((item) => (
-              <div
+              <ClipboardCard
                 key={item.id}
-                className="group rounded-lg border border-gray-200/80 bg-white p-2.5 transition hover:border-gray-300 hover:shadow-sm"
-              >
-                <div className="mb-1.5 flex items-center gap-1.5">
-                  <span
-                    className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
-                      item.kind === "link"
-                        ? "bg-blue-50 text-blue-600"
-                        : item.kind === "code"
-                          ? "bg-emerald-50 text-emerald-600"
-                          : "bg-violet-50 text-violet-600"
-                    }`}
-                  >
-                    {item.kind === "link" ? "链接" : item.kind === "code" ? "代码" : "文本"}
-                  </span>
-                  <div className="flex-1" />
-                  <button
-                    type="button"
-                    onClick={() => void togglePin(item.id)}
-                    className={`rounded p-0.5 hover:bg-gray-100 ${item.is_pinned ? "text-amber-500" : "text-gray-300"}`}
-                    title={item.is_pinned ? "取消固定" : "固定"}
-                    aria-label={item.is_pinned ? "取消固定" : "固定"}
-                  >
-                    {item.is_pinned ? <PinOff className="h-3 w-3" /> : <Pin className="h-3 w-3" />}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void deleteItem(item.id)}
-                    className="rounded p-0.5 text-gray-300 hover:bg-red-50 hover:text-red-500"
-                    title="删除"
-                    aria-label="删除剪贴板记录"
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => void handleCopy(item.id)}
-                  className="block w-full text-left"
-                  title="复制到剪贴板"
-                >
-                  <p
-                    className={`line-clamp-3 whitespace-pre-wrap break-words text-xs leading-4.5 text-gray-700 ${
-                      item.kind === "code" ? "font-mono" : ""
-                    }`}
-                  >
-                    {item.content}
-                  </p>
-                </button>
-                <div className="mt-1.5 flex items-center justify-between text-[10px] text-gray-400">
-                  <span>{formatRelativeTime(item.last_copied_at)}</span>
-                  <span className={copiedId === item.id ? "font-medium text-emerald-600" : ""}>
-                    {copiedId === item.id ? "已复制" : <Copy className="inline h-3 w-3" />}
-                  </span>
-                </div>
-              </div>
+                item={item}
+                focused={false}
+                copied={copiedId === item.id}
+                compact
+                onCopy={() => void handleCopy(item.id)}
+                onTogglePin={() => void togglePin(item.id)}
+                onDelete={() => void deleteItem(item.id)}
+                resolveAttachmentSrc={resolveClipboardAttachment}
+              />
             ))}
           </div>
         )}
       </div>
     </div>
   );
+}
+
+async function resolveClipboardAttachment(id: string): Promise<string> {
+  if (!isTauri()) return "";
+  const attachment = await invoke<{ id: string; path: string }>("get_attachment", { id });
+  return convertFileSrc(attachment.path);
 }
