@@ -220,7 +220,7 @@ export default function App() {
         onCreateNote={createNote}
         onDeleteNote={(id) => void handleDeleteNote(id)}
         onTogglePin={togglePin}
-        onReorderNotes={(ids, isPinned) => void reorderNotes(ids, isPinned)}
+        onReorderNotes={async (ids, isPinned) => { await reorderNotes(ids, isPinned); void sync.syncNow(); }}
         onOpenTrash={async () => {
           if (showTrash) {
             setShowTrash(false);
