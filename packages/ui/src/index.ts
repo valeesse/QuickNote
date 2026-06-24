@@ -15,6 +15,8 @@ export type { SidebarProps, SidebarSyncStatus } from "./components/Sidebar";
 export { useFindReplace } from "./hooks/useFindReplace";
 export type { FindReplaceControls, TextMatch } from "./hooks/useFindReplace";
 export { createAttachmentImageExtension } from "./editor/attachments";
+export { useAttachmentEditorBridge } from "./editor/useAttachmentEditorBridge";
+export type { AttachmentEditorBridgeOptions, InsertedEditorImage } from "./editor/useAttachmentEditorBridge";
 
 // Utility functions
 export { compressImageToDataUrl } from "./utils/image";

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect } from "react";
 import Image from "@tiptap/extension-image";
 import Placeholder from "@tiptap/extension-placeholder";
 import TaskList from "@tiptap/extension-task-list";
@@ -8,7 +8,7 @@ import Typography from "@tiptap/extension-typography";
 import { Markdown } from "@tiptap/markdown";
 import StarterKit from "@tiptap/starter-kit";
 import { useEditor, EditorContent } from "@tiptap/react";
-import { EditorShell, InlineMarkdownMarkRules, compressImageToDataUrl, createAttachmentImageExtension, pickImageFile, useFindReplace } from "@ui/index";
+import { EditorShell, InlineMarkdownMarkRules, createAttachmentImageExtension, useAttachmentEditorBridge } from "@ui/index";
 import type { Attachment, Note, SaveStatus } from "@/types";
 
 const AttachmentImage = createAttachmentImageExtension(Image);
@@ -34,36 +34,29 @@ export function NoteEditor({
   errorMessage,
   isSyncing,
 }: NoteEditorProps) {
-  const noteIdRef = useRef(note.id);
-  const onUpdateRef = useRef(onUpdate);
-  const editorRef = useRef<any>(null);
-  const markEditorChangedRef = useRef<() => void>(() => {});
-  const lastAppliedContentRef = useRef(note.content || "");
-  const isApplyingExternalContentRef = useRef(note.content.includes("attachment://"));
-  const migratedNotesRef = useRef<Set<string>>(new Set());
-
-  useEffect(() => {
-    noteIdRef.current = note.id;
-    onUpdateRef.current = onUpdate;
-  }, [note.id, onUpdate]);
-
-  const handleImageInsert = useCallback(async (file: File) => {
-    try {
-      const dataUrl = await compressImageToDataUrl(file);
+  const bridge = useAttachmentEditorBridge({
+    note,
+    isSyncing,
+    onUpdate,
+    serializeContent: canonicalizeAttachmentReferences,
+    hydrateContent: useCallback(
+      (content: string) => hydrateAttachmentReferences(content, onResolveAttachment),
+      [onResolveAttachment],
+    ),
+    saveImage: useCallback(async (file: File, dataUrl: string) => {
       const attachment = await onSaveAttachment(dataUrl, file.name);
-      editorRef.current?.chain().focus().setImage({
+      return {
         src: attachment.path,
         alt: file.name,
         attachmentId: attachment.id,
-      } as any).run();
-    } catch (err) {
-      console.error("Image insert failed:", err);
-    }
-  }, [onSaveAttachment]);
-
-  const addImageFromFile = useCallback(() => {
-    pickImageFile(handleImageInsert);
-  }, [handleImageInsert]);
+      };
+    }, [onSaveAttachment]),
+    shouldMigrateContent: useCallback((nextNote: Note) => nextNote.content.includes("data:image/"), []),
+    migrateContent: useCallback(
+      (content: string) => migrateDataUrlImages(content, onSaveAttachment),
+      [onSaveAttachment],
+    ),
+  });
 
   const editor = useEditor({
     extensions: [
@@ -85,100 +78,13 @@ export function NoteEditor({
       Markdown.configure({ indentation: { style: "space", size: 2 } }),
     ],
     content: note.content.includes("attachment://") ? "" : note.content || "",
-    onUpdate: ({ editor }) => {
-      if (isApplyingExternalContentRef.current) return;
-      const html = canonicalizeAttachmentReferences(editor.getHTML());
-      lastAppliedContentRef.current = html;
-      markEditorChangedRef.current();
-      onUpdateRef.current(noteIdRef.current, html);
-    },
-    editorProps: {
-      attributes: {
-        class: "tiptap prose prose-sm max-w-none focus:outline-none px-8 py-6 min-h-full",
-      },
-      handlePaste: (_view, event) => {
-        const items = event.clipboardData?.items;
-        if (items) {
-          for (const item of items) {
-            if (item.type.startsWith("image/")) {
-              event.preventDefault();
-              const file = item.getAsFile();
-              if (file) handleImageInsert(file);
-              return true;
-            }
-          }
-        }
-        return false;
-      },
-      handleDrop: (_view, event) => {
-        const files = event.dataTransfer?.files;
-        if (files && files.length > 0) {
-          for (const file of files) {
-            if (file.type.startsWith("image/")) {
-              event.preventDefault();
-              handleImageInsert(file);
-              return true;
-            }
-          }
-        }
-        return false;
-      },
-    },
+    onUpdate: ({ editor }) => bridge.handleEditorUpdate(editor),
+    editorProps: bridge.editorProps,
   });
 
   useEffect(() => {
-    editorRef.current = editor;
-  }, [editor]);
-
-  const findReplace = useFindReplace(editor, note.id);
-
-  useEffect(() => {
-    markEditorChangedRef.current = findReplace.markEditorChanged;
-  }, [findReplace.markEditorChanged]);
-
-  useEffect(() => {
-    editor?.setEditable(!isSyncing);
-  }, [editor, isSyncing]);
-
-  useEffect(() => {
-    if (!editor) return;
-    const nextContent = note.content || "";
-    let cancelled = false;
-    isApplyingExternalContentRef.current = true;
-    void (async () => {
-      try {
-        const hydrated = await hydrateAttachmentReferences(nextContent, onResolveAttachment);
-        if (cancelled) return;
-        if (nextContent !== lastAppliedContentRef.current || editor.isEmpty) {
-          editor.commands.setContent(hydrated, { emitUpdate: false });
-          lastAppliedContentRef.current = nextContent;
-          markEditorChangedRef.current();
-        }
-      } finally {
-        if (!cancelled) isApplyingExternalContentRef.current = false;
-      }
-    })().catch((err) => console.error("Attachment hydration failed:", err));
-    return () => { cancelled = true; };
-  }, [editor, note.id, note.content, onResolveAttachment]);
-
-  useEffect(() => {
-    if (!note.content.includes("data:image/") || migratedNotesRef.current.has(note.id)) return;
-    migratedNotesRef.current.add(note.id);
-
-    let cancelled = false;
-    const migrate = async () => {
-      const nextContent = await migrateDataUrlImages(note.content, onSaveAttachment);
-      if (!cancelled && nextContent !== note.content) {
-        const hydrated = await hydrateAttachmentReferences(nextContent, onResolveAttachment);
-        editor?.commands.setContent(hydrated, { emitUpdate: false });
-        lastAppliedContentRef.current = nextContent;
-        onUpdate(note.id, nextContent);
-      }
-    };
-
-    migrate().catch((err) => console.error("Image migration failed:", err));
-    return () => { cancelled = true; };
-  }, [editor, note.content, note.id, onResolveAttachment, onSaveAttachment, onUpdate]);
+    bridge.setEditor(editor);
+  }, [bridge.setEditor, editor]);
 
   if (!editor) return null;
 
@@ -189,8 +95,8 @@ export function NoteEditor({
       saveStatus={saveStatus}
       errorMessage={errorMessage}
       isSyncing={isSyncing}
-      onInsertImage={addImageFromFile}
-      findReplace={findReplace}
+      onInsertImage={bridge.addImageFromFile}
+      findReplace={bridge.findReplace}
       onOpenHistory={onOpenHistory}
     >
       <EditorContent editor={editor} />
