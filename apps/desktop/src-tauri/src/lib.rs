@@ -9,11 +9,13 @@ use db::Database;
 use std::sync::Arc;
 use sync::SyncService;
 use tauri::Manager;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use tauri_plugin_autostart::ManagerExt;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     use tauri::{
-        menu::{Menu, MenuItem, PredefinedMenuItem},
+        menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
         tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     };
 
@@ -21,15 +23,28 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let new_note = MenuItem::with_id(app, "new_note", "新建快速便签", true, None::<&str>)?;
     let clipboard = MenuItem::with_id(app, "clipboard", "剪贴板历史", true, None::<&str>)?;
     let sync_now = MenuItem::with_id(app, "sync", "立即同步", true, None::<&str>)?;
+    let autostart_enabled = app.autolaunch().is_enabled().unwrap_or(false);
+    let autostart = CheckMenuItem::with_id(
+        app,
+        "autostart",
+        "开机自启",
+        true,
+        autostart_enabled,
+        None::<&str>,
+    )?;
     let sep = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
 
-    let menu = Menu::with_items(app, &[&show, &new_note, &clipboard, &sync_now, &sep, &quit])?;
+    let menu = Menu::with_items(
+        app,
+        &[&show, &new_note, &clipboard, &sync_now, &autostart, &sep, &quit],
+    )?;
 
     // Clone Arcs for the menu event closure (owned, not borrowed from app state)
     let sync_svc: Arc<SyncService> = app.state::<Arc<SyncService>>().inner().clone();
     let db_arc: Arc<Database> = app.state::<Arc<Database>>().inner().clone();
     let paths_arc: Arc<AppPaths> = app.state::<Arc<AppPaths>>().inner().clone();
+    let autostart_item = autostart.clone();
 
     TrayIconBuilder::new()
         .icon(app.default_window_icon().unwrap().clone())
@@ -47,6 +62,21 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                 tauri::async_runtime::spawn(async move {
                     let _ = sync_svc.sync(&db, &paths.attachments_dir).await;
                 });
+            }
+            "autostart" => {
+                let target_enabled = !_app_handle.autolaunch().is_enabled().unwrap_or(false);
+                let result = if target_enabled {
+                    _app_handle.autolaunch().enable()
+                } else {
+                    _app_handle.autolaunch().disable()
+                };
+
+                if let Err(error) = result {
+                    eprintln!("failed to update autostart state: {error}");
+                }
+
+                let actual_enabled = _app_handle.autolaunch().is_enabled().unwrap_or(false);
+                let _ = autostart_item.set_checked(actual_enabled);
             }
             "quit" => {
                 _app_handle.exit(0);
@@ -104,6 +134,7 @@ pub fn run() {
     let shortcut_runtime = Arc::new(shortcuts::ShortcutRuntime::default());
 
     let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_autostart::Builder::new().build())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_clipboard_manager::init());
 
