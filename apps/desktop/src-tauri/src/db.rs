@@ -243,6 +243,7 @@ impl Database {
             title,
             content: content.to_string(),
             is_pinned: false,
+            sort_order,
             created_at: now.clone(),
             updated_at: now,
             version: 1,
@@ -253,7 +254,7 @@ impl Database {
     pub fn get_note(&self, id: &str) -> Result<Option<Note>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, title, content, is_pinned, created_at, updated_at, version, is_deleted
+            "SELECT id, title, content, is_pinned, sort_order, created_at, updated_at, version, is_deleted
              FROM notes WHERE id = ?1 AND is_deleted = 0",
         )?;
 
@@ -264,10 +265,11 @@ impl Database {
                     title: row.get(1)?,
                     content: row.get(2)?,
                     is_pinned: row.get(3)?,
-                    created_at: row.get(4)?,
-                    updated_at: row.get(5)?,
-                    version: row.get(6)?,
-                    is_deleted: row.get(7)?,
+                    sort_order: row.get(4)?,
+                    created_at: row.get(5)?,
+                    updated_at: row.get(6)?,
+                    version: row.get(7)?,
+                    is_deleted: row.get(8)?,
                 })
             })
             .optional()?;
@@ -771,6 +773,7 @@ impl Database {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn get_sync_cursor(&self, provider: &str, device_id: &str) -> Result<i64> {
         let conn = self.conn.lock().unwrap();
         let cursor = conn
@@ -783,6 +786,7 @@ impl Database {
         Ok(cursor.and_then(|value| value.parse().ok()).unwrap_or(0))
     }
 
+    #[allow(dead_code)]
     pub fn set_sync_cursor(&self, provider: &str, device_id: &str, cursor: i64) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
@@ -809,6 +813,48 @@ impl Database {
         let version = ensure_local_causal_version_locked(&tx, entity_type, entity_id, device_id)?;
         tx.commit()?;
         Ok(version)
+    }
+
+    /// Read the current causal version for an entity without incrementing or marking dirty.
+    pub fn get_entity_causal_version(
+        &self,
+        entity_type: &str,
+        entity_id: &str,
+    ) -> Result<Option<CausalVersion>> {
+        let conn = self.conn.lock().unwrap();
+        let row = conn
+            .query_row(
+                "SELECT version_json FROM sync_entity_versions
+                 WHERE entity_type = ?1 AND entity_id = ?2",
+                params![entity_type, entity_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        match row {
+            Some(raw) => {
+                // Parse outside query_row to avoid error type mismatch
+                match serde_json::from_str(&raw) {
+                    Ok(version) => Ok(Some(version)),
+                    Err(_) => Ok(None),
+                }
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Mark all pending changes for a specific entity as synced.
+    pub fn mark_entity_changes_synced(
+        &self,
+        entity_type: &str,
+        entity_id: &str,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE sync_changes SET synced = 1
+             WHERE entity_type = ?1 AND entity_id = ?2 AND synced = 0",
+            params![entity_type, entity_id],
+        )?;
+        Ok(())
     }
 
     pub fn apply_remote_note(
@@ -1216,7 +1262,7 @@ impl Database {
     pub fn get_notes_since(&self, since: &str) -> Result<Vec<Note>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, title, content, is_pinned, created_at, updated_at, version, is_deleted
+            "SELECT id, title, content, is_pinned, sort_order, created_at, updated_at, version, is_deleted
              FROM notes WHERE updated_at > ?1",
         )?;
 
@@ -1227,10 +1273,11 @@ impl Database {
                     title: row.get(1)?,
                     content: row.get(2)?,
                     is_pinned: row.get(3)?,
-                    created_at: row.get(4)?,
-                    updated_at: row.get(5)?,
-                    version: row.get(6)?,
-                    is_deleted: row.get(7)?,
+                    sort_order: row.get(4)?,
+                    created_at: row.get(5)?,
+                    updated_at: row.get(6)?,
+                    version: row.get(7)?,
+                    is_deleted: row.get(8)?,
                 })
             })?
             .collect::<Result<Vec<_>>>()?;
@@ -1241,7 +1288,7 @@ impl Database {
 
 fn get_note_locked(conn: &Connection, id: &str, include_deleted: bool) -> Result<Option<Note>> {
     conn.query_row(
-        "SELECT id, title, content, is_pinned, created_at, updated_at, version, is_deleted
+        "SELECT id, title, content, is_pinned, sort_order, created_at, updated_at, version, is_deleted
          FROM notes WHERE id = ?1 AND (?2 = 1 OR is_deleted = 0)",
         params![id, include_deleted],
         |row| {
@@ -1250,10 +1297,11 @@ fn get_note_locked(conn: &Connection, id: &str, include_deleted: bool) -> Result
                 title: row.get(1)?,
                 content: row.get(2)?,
                 is_pinned: row.get(3)?,
-                created_at: row.get(4)?,
-                updated_at: row.get(5)?,
-                version: row.get(6)?,
-                is_deleted: row.get(7)?,
+                sort_order: row.get(4)?,
+                created_at: row.get(5)?,
+                updated_at: row.get(6)?,
+                version: row.get(7)?,
+                is_deleted: row.get(8)?,
             })
         },
     )
@@ -1494,15 +1542,16 @@ fn ensure_local_causal_version_locked(
 fn upsert_remote_note_locked(conn: &Connection, remote: &Note) -> Result<()> {
     conn.execute(
         "INSERT INTO notes(
-            id, title, content, plain_text, preview, is_pinned,
+            id, title, content, plain_text, preview, is_pinned, sort_order,
             created_at, updated_at, version, is_deleted
-         ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+         ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
          ON CONFLICT(id) DO UPDATE SET
             title = excluded.title,
             content = excluded.content,
             plain_text = excluded.plain_text,
             preview = excluded.preview,
             is_pinned = excluded.is_pinned,
+            sort_order = excluded.sort_order,
             updated_at = excluded.updated_at,
             version = excluded.version,
             is_deleted = excluded.is_deleted",
@@ -1513,6 +1562,7 @@ fn upsert_remote_note_locked(conn: &Connection, remote: &Note) -> Result<()> {
             html_to_text(&remote.content),
             make_preview_without_title(&remote.content),
             remote.is_pinned,
+            remote.sort_order,
             remote.created_at,
             remote.updated_at,
             remote.version,
@@ -1766,6 +1816,7 @@ mod tests {
             title: "远端标题".to_string(),
             content: "<p>远端标题</p><p>远端正文</p>".to_string(),
             is_pinned: false,
+            sort_order: 0,
             created_at: local.created_at,
             updated_at: "9999-12-31T23:59:59Z".to_string(),
             version: 2,
@@ -1805,6 +1856,7 @@ mod tests {
             title: "Seed".to_string(),
             content: "<p>Seed</p>".to_string(),
             is_pinned: false,
+            sort_order: 0,
             created_at: "2026-01-01T00:00:00Z".to_string(),
             updated_at: "2026-01-01T00:00:00Z".to_string(),
             version: 1,
@@ -1857,6 +1909,7 @@ mod tests {
             title: "Seed".to_string(),
             content: "<p>Seed</p>".to_string(),
             is_pinned: false,
+            sort_order: 0,
             created_at: "2026-01-01T00:00:00Z".to_string(),
             updated_at: "2026-01-01T00:00:00Z".to_string(),
             version: 1,

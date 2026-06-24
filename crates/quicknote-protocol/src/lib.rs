@@ -9,6 +9,8 @@ pub struct Note {
     pub title: String,
     pub content: String,
     pub is_pinned: bool,
+    #[serde(default)]
+    pub sort_order: i64,
     pub created_at: String,
     pub updated_at: String,
     pub version: i64,

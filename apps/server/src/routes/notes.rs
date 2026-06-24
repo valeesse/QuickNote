@@ -8,7 +8,7 @@ use axum::Json;
 use std::sync::Arc;
 use uuid::Uuid;
 
-const NOTE_COLUMNS: &str = "id,title,content,is_pinned,created_at,updated_at,version,is_deleted";
+const NOTE_COLUMNS: &str = "id,title,content,is_pinned,sort_order,created_at,updated_at,version,is_deleted";
 
 pub async fn create_note(
     State(state): State<Arc<AppState>>,

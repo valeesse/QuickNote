@@ -546,6 +546,7 @@ function SyncSettingsPanel({
   const [webdavMsg, setWebdavMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [cloudMsg, setCloudMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [savingShortcuts, setSavingShortcuts] = useState(false);
+  const [shortcutsMsg, setShortcutsMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   useEffect(() => {
     if (!config) return;
@@ -636,14 +637,16 @@ function SyncSettingsPanel({
 
   const saveShortcuts = async () => {
     setSavingShortcuts(true);
+    setShortcutsMsg(null);
     try {
       await onSaveShortcuts({
         quick_note: quickNoteShortcut,
         clipboard_history: clipboardShortcut,
         quick_note_alternate: alternateShortcut,
       });
+      setShortcutsMsg({ ok: true, text: "快捷键已保存" });
     } catch {
-      // Error surfaces via console
+      setShortcutsMsg({ ok: false, text: "保存失败，请重试" });
     } finally {
       setSavingShortcuts(false);
     }
@@ -788,6 +791,7 @@ function SyncSettingsPanel({
               </div>
               <p className="text-xs leading-5 text-gray-400">点击输入框后按下按键组合，需要 Ctrl / Alt / Shift 参与。留空可关闭对应快捷键。</p>
               {shortcutError && <p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700 border border-red-100">{shortcutError}</p>}
+              {shortcutsMsg && <p className={`rounded-lg px-3 py-2 text-xs border ${shortcutsMsg.ok ? "bg-green-50 text-green-700 border-green-100" : "bg-red-50 text-red-700 border-red-100"}`}>{shortcutsMsg.text}</p>}
               <button
                 type="button"
                 onClick={() => void saveShortcuts()}

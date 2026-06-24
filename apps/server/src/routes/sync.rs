@@ -387,6 +387,7 @@ mod tests {
                 title: "A".into(),
                 content: "<p>A</p>".into(),
                 is_pinned: false,
+                sort_order: 0,
                 created_at: "2026-01-01T00:00:00Z".into(),
                 updated_at: "2026-01-01T00:00:00Z".into(),
                 version: 1,

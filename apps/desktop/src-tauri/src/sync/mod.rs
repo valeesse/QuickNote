@@ -1,9 +1,10 @@
 mod cloud;
 mod webdav;
 
-use crate::db::{AttachmentRecord, CausalVersion, Database, SyncChange};
+use crate::db::{AttachmentRecord, Database, SyncChange};
 use async_trait::async_trait;
 pub use quicknote_protocol::SyncEnvelope;
+use quicknote_protocol::{CausalRelation, CausalVersion};
 use serde::{Deserialize, Serialize};
 use aes_gcm::{
     aead::{rand_core::RngCore, Aead, KeyInit, OsRng},
@@ -96,6 +97,7 @@ pub trait SyncProvider: Send + Sync {
     async fn list(&self, path: &str) -> Result<Vec<String>, String>;
     async fn get(&self, path: &str) -> Result<Option<Vec<u8>>, String>;
     async fn put(&self, path: &str, body: Vec<u8>, content_type: &str) -> Result<(), String>;
+    #[allow(dead_code)]
     async fn delete(&self, path: &str) -> Result<(), String>;
 }
 
@@ -323,8 +325,8 @@ impl SyncService {
         db.ensure_sync_bootstrap(&format!("{}:{}", config.provider, config.endpoint))
             .map_err(|e| e.to_string())?;
 
-        let pulled_conflicts = pull_changes(&provider, db, attachments_dir, config).await?;
-        let pushed = push_changes(&provider, db, attachments_dir, config).await?;
+        let pulled_conflicts = pull_state(&provider, db, attachments_dir, config).await?;
+        let pushed = push_state(&provider, db, attachments_dir, config).await?;
         Ok((pushed, pulled_conflicts))
     }
 
@@ -502,16 +504,33 @@ fn delete_cloud_token(config: &mut SyncConfig) {
     config.cloud_token_encrypted = None;
 }
 
-async fn push_changes(
+fn state_file_path(device_id: &str, entity_type: &str, entity_id: &str) -> String {
+    format!("state/{device_id}/{entity_type}/{entity_id}.json")
+}
+
+async fn push_state(
     provider: &dyn SyncProvider,
     db: &Database,
     attachments_dir: &Path,
     config: &SyncConfig,
 ) -> Result<usize, String> {
     let changes = db.list_pending_changes(500).map_err(|e| e.to_string())?;
+
+    // Deduplicate: collect unique (entity_type, entity_id) pairs
+    let mut seen = std::collections::HashSet::new();
+    let mut entities: Vec<(String, String)> = Vec::new();
+    for change in &changes {
+        let key = (change.entity_type.clone(), change.entity_id.clone());
+        if seen.insert(key.clone()) {
+            entities.push(key);
+        }
+    }
+
     let mut pushed = 0;
-    for change in changes {
-        let envelope = build_envelope(db, &change, &config.device_id)?;
+    for (entity_type, entity_id) in &entities {
+        let envelope =
+            build_state_envelope(db, entity_type, entity_id, &config.device_id)?;
+
         if let Some(attachment) = &envelope.attachment {
             let bytes = std::fs::read(attachments_dir.join(&attachment.relative_path))
                 .map_err(|e| format!("Failed to read attachment {}: {e}", attachment.id))?;
@@ -523,62 +542,119 @@ async fn push_changes(
                 )
                 .await?;
         }
+
         let body = serde_json::to_vec(&envelope).map_err(|e| e.to_string())?;
-        provider
-            .put(
-                &format!("changes/{}/{:020}.json", config.device_id, change.seq),
-                body,
-                "application/json",
-            )
-            .await?;
-        db.mark_change_synced(change.seq)
+        let path = state_file_path(&config.device_id, entity_type, entity_id);
+        provider.put(&path, body, "application/json").await?;
+        db.mark_entity_changes_synced(entity_type, entity_id)
             .map_err(|e| e.to_string())?;
         pushed += 1;
     }
     Ok(pushed)
 }
 
+fn build_state_envelope(
+    db: &Database,
+    entity_type: &str,
+    entity_id: &str,
+    device_id: &str,
+) -> Result<SyncEnvelope, String> {
+    let causal_version = db
+        .ensure_local_causal_version(entity_type, entity_id, device_id)
+        .map_err(|e| e.to_string())?;
+
+    let mut operation = "upsert".to_string();
+    let mut note = None;
+    let mut attachment = None;
+    let mut clipboard = None;
+    let mut changed_at = chrono::Utc::now().to_rfc3339();
+
+    match entity_type {
+        "note" => {
+            note = db.get_note_for_sync(entity_id).map_err(|e| e.to_string())?;
+            if let Some(ref n) = note {
+                changed_at = n.updated_at.clone();
+            }
+            if note.as_ref().is_some_and(|n| n.is_deleted) || note.is_none() {
+                operation = "delete".to_string();
+                note = None;
+            }
+        }
+        "attachment" => {
+            attachment = db.get_attachment(entity_id).map_err(|e| e.to_string())?;
+            if let Some(ref a) = attachment {
+                changed_at = a.created_at.clone();
+            }
+            if attachment.is_none() {
+                operation = "delete".to_string();
+            }
+        }
+        "clipboard" => {
+            clipboard = db
+                .get_clipboard_item_for_sync(entity_id)
+                .map_err(|e| e.to_string())?;
+            if let Some(ref c) = clipboard {
+                changed_at = c.updated_at.clone();
+            }
+            if clipboard.as_ref().is_some_and(|c| c.is_deleted) || clipboard.is_none() {
+                operation = "delete".to_string();
+                clipboard = None;
+            }
+        }
+        _ => {}
+    }
+
+    Ok(SyncEnvelope {
+        schema_version: 2,
+        device_id: device_id.to_string(),
+        seq: 0,
+        entity_type: entity_type.to_string(),
+        entity_id: entity_id.to_string(),
+        operation,
+        changed_at,
+        causal_version: Some(causal_version),
+        note,
+        attachment,
+        clipboard,
+    })
+}
+
+/// Build an envelope for cloud sync (per-change, retains seq).
 fn build_envelope(
     db: &Database,
     change: &SyncChange,
     device_id: &str,
 ) -> Result<SyncEnvelope, String> {
-    let mut operation = change.operation.clone();
-    let mut note = None;
-    let mut attachment = None;
-    let mut clipboard = None;
     let causal_version = db
         .ensure_local_causal_version(&change.entity_type, &change.entity_id, device_id)
         .map_err(|e| e.to_string())?;
-    if change.entity_type == "note" {
-        note = db
-            .get_note_for_sync(&change.entity_id)
-            .map_err(|e| e.to_string())?;
-        if note.as_ref().is_some_and(|value| value.is_deleted) || note.is_none() {
-            operation = "delete".to_string();
+
+    let mut note = None;
+    let mut attachment = None;
+    let mut clipboard = None;
+
+    match change.entity_type.as_str() {
+        "note" => {
+            note = db.get_note_for_sync(&change.entity_id).map_err(|e| e.to_string())?;
         }
-    } else if change.entity_type == "attachment" {
-        attachment = db
-            .get_attachment(&change.entity_id)
-            .map_err(|e| e.to_string())?;
-        if attachment.is_none() {
-            operation = "delete".to_string();
+        "attachment" => {
+            attachment = db.get_attachment(&change.entity_id).map_err(|e| e.to_string())?;
         }
-    } else if change.entity_type == "clipboard" {
-        clipboard = db
-            .get_clipboard_item_for_sync(&change.entity_id)
-            .map_err(|e| e.to_string())?;
-        if clipboard.as_ref().is_some_and(|item| item.is_deleted) || clipboard.is_none() {
-            operation = "delete".to_string();
+        "clipboard" => {
+            clipboard = db
+                .get_clipboard_item_for_sync(&change.entity_id)
+                .map_err(|e| e.to_string())?;
         }
+        _ => {}
     }
+
     Ok(SyncEnvelope {
         schema_version: 2,
         device_id: device_id.to_string(),
         seq: change.seq,
         entity_type: change.entity_type.clone(),
         entity_id: change.entity_id.clone(),
-        operation,
+        operation: change.operation.clone(),
         changed_at: change.changed_at.clone(),
         causal_version: Some(causal_version),
         note,
@@ -587,7 +663,7 @@ fn build_envelope(
     })
 }
 
-async fn pull_changes(
+async fn pull_state(
     provider: &dyn SyncProvider,
     db: &Database,
     attachments_dir: &Path,
@@ -595,50 +671,83 @@ async fn pull_changes(
 ) -> Result<(usize, usize), String> {
     let mut pulled = 0;
     let mut conflicts = 0;
-    let cursor_scope = format!("{}:{}", config.provider, config.endpoint);
-    for device_id in provider.list("changes").await? {
-        if device_id == config.device_id || !is_safe_path_segment(&device_id) {
+
+    // List remote device_ids under state/
+    let device_ids = provider.list("state").await.unwrap_or_default();
+    for device_id in &device_ids {
+        if device_id == &config.device_id || !is_safe_path_segment(device_id) {
             continue;
         }
-        let mut cursor = db
-            .get_sync_cursor(&cursor_scope, &device_id)
-            .map_err(|e| e.to_string())?;
-        let mut files = provider.list(&format!("changes/{device_id}")).await?;
-        files.sort();
-        for file in &files {
-            let Some(seq) = parse_change_sequence(file) else {
-                continue;
-            };
-            if seq <= cursor {
+        // List entity types under state/{device_id}/
+        let entity_types = provider
+            .list(&format!("state/{device_id}"))
+            .await
+            .unwrap_or_default();
+        for entity_type in &entity_types {
+            if !is_safe_path_segment(entity_type) {
                 continue;
             }
-            let path = format!("changes/{device_id}/{file}");
-            let Some(body) = provider.get(&path).await? else {
-                continue;
-            };
-            let envelope: SyncEnvelope = serde_json::from_slice(&body)
-                .map_err(|e| format!("Invalid remote change {path}: {e}"))?;
-            validate_envelope(&envelope, &device_id, seq)
-                .map_err(|e| format!("Invalid remote change {path}: {e}"))?;
-            let (changed, conflict) =
-                apply_envelope(provider, db, attachments_dir, &envelope, &config.device_id).await?;
-            if changed {
-                pulled += 1;
-            }
-            if conflict {
-                conflicts += 1;
-            }
-            cursor = seq;
-            db.set_sync_cursor(&cursor_scope, &device_id, cursor)
-                .map_err(|e| e.to_string())?;
-        }
-        // Clean up remote change files that have been fully processed
-        for file in &files {
-            if let Some(seq) = parse_change_sequence(file) {
-                if seq <= cursor {
-                    let path = format!("changes/{device_id}/{file}");
-                    // Best-effort deletion — do not fail the sync if cleanup errors.
-                    let _ = provider.delete(&path).await;
+            // List entity files under state/{device_id}/{entity_type}/
+            let files = provider
+                .list(&format!("state/{device_id}/{entity_type}"))
+                .await
+                .unwrap_or_default();
+            for file in &files {
+                let Some(entity_id) = file.strip_suffix(".json") else {
+                    continue;
+                };
+                if entity_id.is_empty() || !is_safe_path_segment(entity_id) {
+                    continue;
+                }
+                let path = format!("state/{device_id}/{entity_type}/{file}");
+                let Some(body) = provider.get(&path).await? else {
+                    continue;
+                };
+                let envelope: SyncEnvelope = match serde_json::from_slice(&body) {
+                    Ok(e) => e,
+                    Err(e) => {
+                        eprintln!("Skipping invalid state file {path}: {e}");
+                        continue;
+                    }
+                };
+                if let Err(e) = validate_envelope(&envelope, device_id) {
+                    eprintln!("Skipping invalid envelope {path}: {e}");
+                    continue;
+                }
+
+                // Compare causal versions
+                let legacy_fallback =
+                    CausalVersion::legacy(&envelope.device_id, envelope.seq);
+                let remote_version = envelope
+                    .causal_version
+                    .as_ref()
+                    .unwrap_or(&legacy_fallback);
+                let local_version = db
+                    .get_entity_causal_version(entity_type, entity_id)
+                    .map_err(|e| e.to_string())?;
+
+                let should_apply = match &local_version {
+                    None => true, // no local version → apply
+                    Some(local) => {
+                        match remote_version.relation(local) {
+                            CausalRelation::Dominates | CausalRelation::Concurrent => true,
+                            CausalRelation::Equal | CausalRelation::Dominated => false,
+                        }
+                    }
+                };
+
+                if !should_apply {
+                    continue;
+                }
+
+                let (changed, conflict) =
+                    apply_envelope(provider, db, attachments_dir, &envelope, &config.device_id)
+                        .await?;
+                if changed {
+                    pulled += 1;
+                }
+                if conflict {
+                    conflicts += 1;
                 }
             }
         }
@@ -653,13 +762,6 @@ fn is_safe_path_segment(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }
 
-fn parse_change_sequence(filename: &str) -> Option<i64> {
-    let digits = filename.strip_suffix(".json")?;
-    if digits.len() != 20 || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
-    }
-    digits.parse().ok()
-}
 
 async fn apply_envelope(
     provider: &dyn SyncProvider,
@@ -731,7 +833,6 @@ async fn apply_envelope(
 fn validate_envelope(
     envelope: &SyncEnvelope,
     expected_device: &str,
-    expected_seq: i64,
 ) -> Result<(), String> {
     if !matches!(envelope.schema_version, 1 | 2) {
         return Err(format!(
@@ -742,8 +843,8 @@ fn validate_envelope(
     if envelope.schema_version == 2 && envelope.causal_version.is_none() {
         return Err("schema v2 change is missing its causal version".to_string());
     }
-    if envelope.device_id != expected_device || envelope.seq != expected_seq {
-        return Err("device or sequence does not match its immutable path".to_string());
+    if envelope.device_id != expected_device {
+        return Err("device does not match expected source".to_string());
     }
     if !matches!(
         envelope.entity_type.as_str(),
@@ -768,6 +869,7 @@ fn validate_envelope(
         return Err("attachment payload does not match its entity ID".to_string());
     }
     if envelope.entity_type == "clipboard"
+        && envelope.operation == "upsert"
         && envelope.clipboard.as_ref().map(|item| item.id.as_str())
             != Some(envelope.entity_id.as_str())
     {
@@ -852,9 +954,14 @@ mod tests {
 
         async fn put(&self, path: &str, body: Vec<u8>, _content_type: &str) -> Result<(), String> {
             let mut objects = self.objects.lock().unwrap();
-            if let Some(existing) = objects.get(path) {
-                if existing != &body {
-                    return Err(format!("immutable collision at {path}"));
+            let immutable = path.starts_with("attachments/");
+            if immutable {
+                if let Some(existing) = objects.get(path) {
+                    if existing != &body {
+                        return Err(format!("immutable collision at {path}"));
+                    }
+                } else {
+                    objects.insert(path.to_string(), body);
                 }
             } else {
                 objects.insert(path.to_string(), body);
@@ -891,7 +998,7 @@ mod tests {
     }
 
     #[test]
-    fn envelope_identity_must_match_immutable_path() {
+    fn envelope_validates_device_and_schema() {
         let envelope = SyncEnvelope {
             schema_version: 1,
             device_id: "device-a".to_string(),
@@ -906,6 +1013,7 @@ mod tests {
                 title: "Note".to_string(),
                 content: String::new(),
                 is_pinned: false,
+                sort_order: 0,
                 created_at: "2026-01-01T00:00:00Z".to_string(),
                 updated_at: "2026-01-01T00:00:00Z".to_string(),
                 version: 1,
@@ -914,14 +1022,13 @@ mod tests {
             attachment: None,
             clipboard: None,
         };
-        assert!(validate_envelope(&envelope, "device-a", 7).is_ok());
-        assert!(validate_envelope(&envelope, "device-b", 7).is_err());
-        assert!(validate_envelope(&envelope, "device-a", 8).is_err());
+        assert!(validate_envelope(&envelope, "device-a").is_ok());
+        assert!(validate_envelope(&envelope, "device-b").is_err());
         let mut version_two = envelope.clone();
         version_two.schema_version = 2;
-        assert!(validate_envelope(&version_two, "device-a", 7).is_err());
+        assert!(validate_envelope(&version_two, "device-a").is_err());
         version_two.causal_version = Some(CausalVersion::legacy("device-a", 7));
-        assert!(validate_envelope(&version_two, "device-a", 7).is_ok());
+        assert!(validate_envelope(&version_two, "device-a").is_ok());
     }
 
     #[test]
@@ -943,16 +1050,15 @@ mod tests {
     }
 
     #[test]
-    fn only_canonical_change_filenames_advance_a_cursor() {
-        assert_eq!(parse_change_sequence("00000000000000000042.json"), Some(42));
-        assert_eq!(parse_change_sequence("42.json"), None);
-        assert_eq!(parse_change_sequence("00000000000000000042.json.bak"), None);
+    fn safe_path_segment_validation() {
         assert!(is_safe_path_segment("device-a_1.test"));
         assert!(!is_safe_path_segment("../device-a"));
+        assert!(!is_safe_path_segment(""));
+        assert!(!is_safe_path_segment("has space"));
     }
 
     #[tokio::test]
-    async fn acknowledgement_loss_retries_same_immutable_change_before_clearing_outbox() {
+    async fn push_state_retries_after_failure() {
         let dir = tempfile::tempdir().unwrap();
         let db = Database::new(dir.path().to_path_buf()).unwrap();
         db.create_note("<p>durable</p>").unwrap();
@@ -960,42 +1066,39 @@ mod tests {
         provider.fail_after_next_put();
         let sync_config = config("device-a");
 
-        assert!(push_changes(&provider, &db, dir.path(), &sync_config)
+        assert!(push_state(&provider, &db, dir.path(), &sync_config)
             .await
             .is_err());
         assert_eq!(db.list_pending_changes(10).unwrap().len(), 1);
-        assert_eq!(provider.objects.lock().unwrap().len(), 1);
 
         assert_eq!(
-            push_changes(&provider, &db, dir.path(), &sync_config)
+            push_state(&provider, &db, dir.path(), &sync_config)
                 .await
                 .unwrap(),
             1
         );
         assert!(db.list_pending_changes(10).unwrap().is_empty());
-        assert_eq!(provider.objects.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]
-    async fn invalid_remote_change_does_not_advance_cursor() {
+    async fn invalid_remote_state_file_is_skipped() {
         let dir = tempfile::tempdir().unwrap();
         let db = Database::new(dir.path().to_path_buf()).unwrap();
         let provider = MemoryProvider::default();
         provider.objects.lock().unwrap().insert(
-            "changes/device-b/00000000000000000001.json".to_string(),
+            "state/device-b/note/bad-note.json".to_string(),
             b"{not-json".to_vec(),
         );
         let sync_config = config("device-a");
 
-        assert!(pull_changes(&provider, &db, dir.path(), &sync_config)
-            .await
-            .is_err());
-        let scope = format!("{}:{}", sync_config.provider, sync_config.endpoint);
-        assert_eq!(db.get_sync_cursor(&scope, "device-b").unwrap(), 0);
+        // pull_state skips invalid files gracefully
+        let result = pull_state(&provider, &db, dir.path(), &sync_config).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), (0, 0));
     }
 
     #[tokio::test]
-    async fn missing_remote_attachment_does_not_advance_cursor() {
+    async fn missing_remote_attachment_fails_pull() {
         let dir = tempfile::tempdir().unwrap();
         let db = Database::new(dir.path().to_path_buf()).unwrap();
         let provider = MemoryProvider::default();
@@ -1004,7 +1107,7 @@ mod tests {
         let envelope = SyncEnvelope {
             schema_version: 2,
             device_id: "device-b".to_string(),
-            seq: 1,
+            seq: 0,
             entity_type: "attachment".to_string(),
             entity_id: id.clone(),
             operation: "upsert".to_string(),
@@ -1021,16 +1124,15 @@ mod tests {
             clipboard: None,
         };
         provider.objects.lock().unwrap().insert(
-            "changes/device-b/00000000000000000001.json".to_string(),
+            format!("state/device-b/attachment/{id}.json"),
             serde_json::to_vec(&envelope).unwrap(),
         );
         let sync_config = config("device-a");
 
-        assert!(pull_changes(&provider, &db, dir.path(), &sync_config)
+        // apply_envelope fails when the remote attachment bytes are not available
+        assert!(pull_state(&provider, &db, dir.path(), &sync_config)
             .await
             .is_err());
-        let scope = format!("{}:{}", sync_config.provider, sync_config.endpoint);
-        assert_eq!(db.get_sync_cursor(&scope, "device-b").unwrap(), 0);
     }
 
     #[test]
@@ -1091,13 +1193,13 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            push_changes(&provider, &db_a, dir_a.path(), &config("device-a"))
+            push_state(&provider, &db_a, dir_a.path(), &config("device-a"))
                 .await
                 .unwrap(),
             1
         );
         assert_eq!(
-            pull_changes(&provider, &db_b, dir_b.path(), &config("device-b"))
+            pull_state(&provider, &db_b, dir_b.path(), &config("device-b"))
                 .await
                 .unwrap(),
             (1, 0)
@@ -1106,5 +1208,78 @@ mod tests {
             db_b.get_clipboard_item(&item.id).unwrap().unwrap().content,
             item.content
         );
+    }
+
+    #[tokio::test]
+    async fn multiple_edits_produce_single_state_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::new(dir.path().to_path_buf()).unwrap();
+        let note = db.create_note("<p>first</p>").unwrap();
+        let provider = MemoryProvider::default();
+        let sync_config = config("device-a");
+
+        // First push
+        assert_eq!(
+            push_state(&provider, &db, dir.path(), &sync_config).await.unwrap(),
+            1
+        );
+
+        // Edit same note again
+        db.update_note(&note.id, "<p>second</p>").unwrap();
+        assert_eq!(
+            push_state(&provider, &db, dir.path(), &sync_config).await.unwrap(),
+            1
+        );
+
+        // Only one state file for this entity
+        let state_files: Vec<String> = provider
+            .objects
+            .lock()
+            .unwrap()
+            .keys()
+            .filter(|k| k.starts_with("state/"))
+            .cloned()
+            .collect();
+        assert_eq!(state_files.len(), 1);
+        assert!(state_files[0].contains(&note.id));
+    }
+
+    #[tokio::test]
+    async fn pull_skips_dominated_remote_state() {
+        let dir_a = tempfile::tempdir().unwrap();
+        let dir_b = tempfile::tempdir().unwrap();
+        let db_a = Database::new(dir_a.path().to_path_buf()).unwrap();
+        let db_b = Database::new(dir_b.path().to_path_buf()).unwrap();
+        let provider = MemoryProvider::default();
+
+        // Device A creates and pushes a note
+        let note = db_a.create_note("<p>hello</p>").unwrap();
+        assert_eq!(
+            push_state(&provider, &db_a, dir_a.path(), &config("device-a"))
+                .await.unwrap(), 1
+        );
+
+        // Device B pulls it
+        assert_eq!(
+            pull_state(&provider, &db_b, dir_b.path(), &config("device-b"))
+                .await.unwrap(), (1, 0)
+        );
+
+        // Device B edits and pushes
+        db_b.update_note(&note.id, "<p>edited by B</p>").unwrap();
+        assert_eq!(
+            push_state(&provider, &db_b, dir_b.path(), &config("device-b"))
+                .await.unwrap(), 1
+        );
+
+        // Device A pulls B's edit — should apply (B dominates)
+        let (pulled, _) = pull_state(&provider, &db_a, dir_a.path(), &config("device-a"))
+            .await.unwrap();
+        assert_eq!(pulled, 1);
+
+        // Second pull without changes — should skip (equal)
+        let (pulled2, _) = pull_state(&provider, &db_a, dir_a.path(), &config("device-a"))
+            .await.unwrap();
+        assert_eq!(pulled2, 0);
     }
 }

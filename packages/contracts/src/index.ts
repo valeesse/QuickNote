@@ -3,6 +3,7 @@ export interface Note {
   title: string;
   content: string;
   is_pinned: boolean;
+  sort_order: number;
   created_at: string;
   updated_at: string;
   version: number;

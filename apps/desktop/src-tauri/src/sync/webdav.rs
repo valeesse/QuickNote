@@ -105,8 +105,13 @@ fn parse_propfind_names(xml: &str, current_path: &str) -> Result<Vec<String>, St
 impl SyncProvider for WebDavProvider {
     async fn prepare(&self, device_id: &str) -> Result<(), String> {
         self.create_collection("").await?;
-        self.create_collection("changes").await?;
-        self.create_collection(&format!("changes/{device_id}"))
+        self.create_collection("state").await?;
+        self.create_collection(&format!("state/{device_id}")).await?;
+        self.create_collection(&format!("state/{device_id}/note"))
+            .await?;
+        self.create_collection(&format!("state/{device_id}/clipboard"))
+            .await?;
+        self.create_collection(&format!("state/{device_id}/attachment"))
             .await?;
         self.create_collection("attachments").await?;
         Ok(())
@@ -155,7 +160,7 @@ impl SyncProvider for WebDavProvider {
     }
 
     async fn put(&self, path: &str, body: Vec<u8>, content_type: &str) -> Result<(), String> {
-        let immutable = path.starts_with("changes/");
+        let immutable = path.starts_with("attachments/");
         let mut request = self
             .client
             .put(self.url(path))
@@ -238,7 +243,7 @@ mod tests {
     async fn immutable_put_accepts_identical_precondition_retry() {
         let server = MockServer::start().await;
         let body = br#"{"schema_version":2}"#.to_vec();
-        let change_path = "/root/changes/device-a/00000000000000000001.json";
+        let change_path = "/root/attachments/abc123";
         Mock::given(method("PUT"))
             .and(path(change_path))
             .and(header("if-none-match", "*"))
@@ -258,9 +263,9 @@ mod tests {
             WebDavProvider::new(&format!("{}/root", server.uri()), "user", "pass").unwrap();
         provider
             .put(
-                "changes/device-a/00000000000000000001.json",
+                "attachments/abc123",
                 body,
-                "application/json",
+                "application/octet-stream",
             )
             .await
             .unwrap();
@@ -299,7 +304,7 @@ mod tests {
         let provider = WebDavProvider::new(&endpoint, &username, &password).unwrap();
         provider.prepare(&device_id).await.unwrap();
 
-        let path = format!("changes/{device_id}/00000000000000000001.json");
+        let path = format!("state/{device_id}/note/test-note.json");
         let body = br#"{"schema_version":2,"smoke":true}"#.to_vec();
         provider
             .put(&path, body.clone(), "application/json")
@@ -307,9 +312,9 @@ mod tests {
             .unwrap();
         assert_eq!(provider.get(&path).await.unwrap(), Some(body));
         assert!(provider
-            .list(&format!("changes/{device_id}"))
+            .list(&format!("state/{device_id}/note"))
             .await
             .unwrap()
-            .contains(&"00000000000000000001.json".to_string()));
+            .contains(&"test-note.json".to_string()));
     }
 }

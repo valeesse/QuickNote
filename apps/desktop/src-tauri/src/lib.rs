@@ -112,6 +112,11 @@ fn show_main_window(app: &tauri::AppHandle) {
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub(crate) fn open_popup(app: &tauri::AppHandle, label: &str) {
     if let Some(window) = app.get_webview_window(label) {
+        // Toggle: if already visible, hide it; otherwise show and focus.
+        if window.is_visible().unwrap_or(false) {
+            let _ = window.hide();
+            return;
+        }
         if let Ok(Some(monitor)) = window.current_monitor() {
             let screen = monitor.size();
             let origin = monitor.position();
