@@ -18,6 +18,7 @@ export { createAttachmentImageExtension } from "./editor/attachments";
 
 // Utility functions
 export { compressImageToDataUrl } from "./utils/image";
+export { pickImageFile } from "./utils/file";
 export { formatSaveStatus, sanitizeFilename, formatRelativeTime } from "./utils/format";
 export { stripHtml, stripMarkdown } from "./utils/html";
 export { clipboardItemToNoteContent, escapeHtml } from "./utils/clipboard";

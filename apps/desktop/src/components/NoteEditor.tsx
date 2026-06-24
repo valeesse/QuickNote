@@ -8,7 +8,7 @@ import Typography from "@tiptap/extension-typography";
 import { Markdown } from "@tiptap/markdown";
 import StarterKit from "@tiptap/starter-kit";
 import { useEditor, EditorContent } from "@tiptap/react";
-import { EditorShell, InlineMarkdownMarkRules, compressImageToDataUrl, createAttachmentImageExtension, useFindReplace } from "@ui/index";
+import { EditorShell, InlineMarkdownMarkRules, compressImageToDataUrl, createAttachmentImageExtension, pickImageFile, useFindReplace } from "@ui/index";
 import type { Attachment, Note, SaveStatus } from "@/types";
 
 const AttachmentImage = createAttachmentImageExtension(Image);
@@ -62,23 +62,8 @@ export function NoteEditor({
   }, [onSaveAttachment]);
 
   const addImageFromFile = useCallback(() => {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = "image/*";
-    input.onchange = async (e: any) => {
-      const file = e.target.files?.[0];
-      if (file) {
-        const dataUrl = await compressImageToDataUrl(file);
-        const attachment = await onSaveAttachment(dataUrl, file.name);
-        editorRef.current?.chain().focus().setImage({
-          src: attachment.path,
-          alt: file.name,
-          attachmentId: attachment.id,
-        } as any).run();
-      }
-    };
-    input.click();
-  }, [onSaveAttachment]);
+    pickImageFile(handleImageInsert);
+  }, [handleImageInsert]);
 
   const editor = useEditor({
     extensions: [
