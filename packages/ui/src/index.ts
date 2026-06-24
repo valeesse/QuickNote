@@ -14,6 +14,7 @@ export { EditorShell } from "./components/EditorShell";
 export type { SidebarProps, SidebarSyncStatus } from "./components/Sidebar";
 export { useFindReplace } from "./hooks/useFindReplace";
 export type { FindReplaceControls, TextMatch } from "./hooks/useFindReplace";
+export { createAttachmentImageExtension } from "./editor/attachments";
 
 // Utility functions
 export { compressImageToDataUrl } from "./utils/image";

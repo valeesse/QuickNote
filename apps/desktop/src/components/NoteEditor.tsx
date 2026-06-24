@@ -8,27 +8,10 @@ import Typography from "@tiptap/extension-typography";
 import { Markdown } from "@tiptap/markdown";
 import StarterKit from "@tiptap/starter-kit";
 import { useEditor, EditorContent } from "@tiptap/react";
-import { EditorShell, InlineMarkdownMarkRules, compressImageToDataUrl, useFindReplace } from "@ui/index";
+import { EditorShell, InlineMarkdownMarkRules, compressImageToDataUrl, createAttachmentImageExtension, useFindReplace } from "@ui/index";
 import type { Attachment, Note, SaveStatus } from "@/types";
 
-const AttachmentImage = Image.extend({
-  addAttributes() {
-    return {
-      ...this.parent?.(),
-      attachmentId: {
-        default: null,
-        parseHTML: (element) =>
-          element.getAttribute("data-attachment-id") ||
-          element.getAttribute("src")?.match(/^attachment:\/\/(.+)$/)?.[1] ||
-          null,
-        renderHTML: (attributes) =>
-          attributes.attachmentId
-            ? { "data-attachment-id": attributes.attachmentId }
-            : {},
-      },
-    };
-  },
-});
+const AttachmentImage = createAttachmentImageExtension(Image);
 
 interface NoteEditorProps {
   note: Note;
