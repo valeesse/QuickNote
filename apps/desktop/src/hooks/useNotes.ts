@@ -230,7 +230,7 @@ export function useNotes() {
         ).sort((a, b) => {
           const pinnedDelta = Number(b.is_pinned) - Number(a.is_pinned);
           if (pinnedDelta !== 0) return pinnedDelta;
-          return (order.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (order.get(b.id) ?? Number.MAX_SAFE_INTEGER);
+          return (order.get(b.id) ?? Number.MAX_SAFE_INTEGER) - (order.get(a.id) ?? Number.MAX_SAFE_INTEGER);
         })
       );
 

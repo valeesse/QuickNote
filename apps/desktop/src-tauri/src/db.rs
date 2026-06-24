@@ -202,7 +202,7 @@ impl Database {
         )?;
 
         conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_notes_pinned ON notes(is_pinned, sort_order ASC, updated_at DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_notes_pinned ON notes(is_pinned, sort_order DESC, updated_at DESC)",
             [],
         )?;
 
@@ -283,7 +283,7 @@ impl Database {
             "SELECT id, title, preview, is_pinned, created_at, updated_at
              FROM notes
              WHERE is_deleted = 0
-             ORDER BY is_pinned DESC, sort_order ASC, updated_at DESC",
+             ORDER BY is_pinned DESC, sort_order DESC, updated_at DESC"
         )?;
 
         let notes = stmt
@@ -441,10 +441,11 @@ impl Database {
         let now = Utc::now().to_rfc3339();
         let tx = conn.transaction()?;
 
+        let len = ids.len() as i64;
         for (index, id) in ids.iter().enumerate() {
             let rows = tx.execute(
                 "UPDATE notes SET is_pinned = ?1, sort_order = ?2, updated_at = ?3 WHERE id = ?4 AND is_deleted = 0",
-                params![is_pinned, index as i64, now, id],
+                params![is_pinned, len - index as i64, now, id],
             )?;
             if rows > 0 {
                 enqueue_change(&tx, "note", id, "upsert", &now)?;

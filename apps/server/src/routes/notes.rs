@@ -68,7 +68,7 @@ pub async fn list_notes(
     State(state): State<Arc<AppState>>,
     AuthUser(user_id): AuthUser,
 ) -> Result<Json<Vec<NoteSummary>>, AppError> {
-    let notes = sqlx::query_as("SELECT id,title,LEFT(content,200) AS preview,is_pinned,created_at,updated_at FROM notes WHERE user_id=$1 AND is_deleted=false ORDER BY is_pinned DESC,sort_order ASC,updated_at DESC")
+    let notes = sqlx::query_as("SELECT id,title,LEFT(content,200) AS preview,is_pinned,created_at,updated_at FROM notes WHERE user_id=$1 AND is_deleted=false ORDER BY is_pinned DESC,sort_order DESC,updated_at DESC")
         .bind(user_id).fetch_all(state.db.inner()).await?;
     Ok(Json(notes))
 }
@@ -80,13 +80,14 @@ pub async fn reorder_notes(
 ) -> Result<Json<bool>, AppError> {
     let now = chrono::Utc::now().to_rfc3339();
     let mut tx = state.db.inner().begin().await?;
+    let len = req.ids.len() as i64;
     for (index, id) in req.ids.iter().enumerate() {
         let query = format!("UPDATE notes SET is_pinned=$3,sort_order=$4,updated_at=$5 WHERE id=$1 AND user_id=$2 AND is_deleted=false RETURNING {NOTE_COLUMNS}");
         let note: Option<Note> = sqlx::query_as(&query)
             .bind(id)
             .bind(user_id)
             .bind(req.is_pinned)
-            .bind(index as i64)
+            .bind(len - index as i64)
             .bind(&now)
             .fetch_optional(&mut *tx)
             .await?;
@@ -188,30 +189,49 @@ pub async fn toggle_pin(
 ) -> Result<Json<bool>, AppError> {
     let mut tx = state.db.inner().begin().await?;
     let now = chrono::Utc::now().to_rfc3339();
-    let query = format!("UPDATE notes SET is_pinned=NOT is_pinned,updated_at=$3 WHERE id=$1 AND user_id=$2 AND is_deleted=false RETURNING {NOTE_COLUMNS}");
-    let note: Option<Note> = sqlx::query_as(&query)
-        .bind(&id)
-        .bind(user_id)
-        .bind(now)
-        .fetch_optional(&mut *tx)
-        .await?;
-    if let Some(note) = note {
-        append_change(
-            &mut tx,
-            user_id,
-            "note",
-            &id,
-            "upsert",
-            ChangePayload::Note(note),
+    // Read current pin state to compute target sort_order
+    let current: Option<(bool, i64)> = sqlx::query_as(
+        "SELECT is_pinned, sort_order FROM notes WHERE id=$1 AND user_id=$2 AND is_deleted=false",
+    )
+    .bind(&id)
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if let Some((is_pinned, _)) = current {
+        let target_pinned = !is_pinned;
+        let next_sort_order: i64 = sqlx::query_scalar(
+            "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM notes WHERE user_id=$1 AND is_deleted=false AND is_pinned=$2",
         )
+        .bind(user_id)
+        .bind(target_pinned)
+        .fetch_one(&mut *tx)
         .await?;
-        tx.commit().await?;
-        notify(&state, user_id, &id, "upsert");
-        Ok(Json(true))
-    } else {
-        tx.rollback().await?;
-        Ok(Json(false))
+        let query = format!("UPDATE notes SET is_pinned=$3,sort_order=$4,updated_at=$5 WHERE id=$1 AND user_id=$2 AND is_deleted=false RETURNING {NOTE_COLUMNS}");
+        let note: Option<Note> = sqlx::query_as(&query)
+            .bind(&id)
+            .bind(user_id)
+            .bind(target_pinned)
+            .bind(next_sort_order)
+            .bind(&now)
+            .fetch_optional(&mut *tx)
+            .await?;
+        if let Some(note) = note {
+            append_change(
+                &mut tx,
+                user_id,
+                "note",
+                &id,
+                "upsert",
+                ChangePayload::Note(note),
+            )
+            .await?;
+            tx.commit().await?;
+            notify(&state, user_id, &id, "upsert");
+            return Ok(Json(true));
+        }
     }
+    tx.rollback().await?;
+    Ok(Json(false))
 }
 
 async fn mutate_flag(

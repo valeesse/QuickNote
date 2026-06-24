@@ -18,7 +18,7 @@ export function EmptyState({ onCreateNote, hints }: EmptyStateProps) {
       </p>
       <button
         type="button"
-        onClick={onCreateNote}
+        onClick={() => onCreateNote()}
         className="focus-ring empty-state__button"
       >
         <Plus className="h-4 w-4" />

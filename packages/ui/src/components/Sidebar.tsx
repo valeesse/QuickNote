@@ -246,7 +246,7 @@ export function Sidebar({
           {viewMode === "notes" && (
             <button
               type="button"
-              onClick={onCreateNote}
+              onClick={() => onCreateNote()}
               className="focus-ring flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600 text-white shadow-sm transition-colors hover:bg-blue-700"
               title="新建便签 (Ctrl+N)"
               aria-label="新建便签"
@@ -297,7 +297,7 @@ export function Sidebar({
                   {searchQuery ? "没有找到匹配的便签" : "还没有便签"}
                 </h3>
                 {!searchQuery && (
-                  <button type="button" onClick={onCreateNote} className="mt-3 text-sm font-medium text-blue-600 hover:text-blue-700">
+                  <button type="button" onClick={() => onCreateNote()} className="mt-3 text-sm font-medium text-blue-600 hover:text-blue-700">
                     创建第一个便签
                   </button>
                 )}
