@@ -251,13 +251,13 @@ async fn apply_to_canonical(
                 .as_ref()
                 .ok_or_else(|| AppError::BadRequest("Note upsert is missing its payload".into()))?;
             sqlx::query(
-                "INSERT INTO notes (user_id, id, title, content, is_pinned, created_at, updated_at, version, is_deleted)
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+                "INSERT INTO notes (user_id, id, title, content, is_pinned, sort_order, created_at, updated_at, version, is_deleted)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
                  ON CONFLICT (user_id,id) DO UPDATE SET title=EXCLUDED.title, content=EXCLUDED.content,
-                 is_pinned=EXCLUDED.is_pinned, updated_at=EXCLUDED.updated_at,
+                 is_pinned=EXCLUDED.is_pinned, sort_order=EXCLUDED.sort_order, updated_at=EXCLUDED.updated_at,
                  version=EXCLUDED.version, is_deleted=EXCLUDED.is_deleted",
             ).bind(user_id).bind(&note.id).bind(&note.title).bind(&note.content).bind(note.is_pinned)
-                .bind(&note.created_at).bind(&note.updated_at).bind(note.version).bind(note.is_deleted)
+                .bind(note.sort_order).bind(&note.created_at).bind(&note.updated_at).bind(note.version).bind(note.is_deleted)
                 .execute(&mut **tx).await?;
         }
         ("clipboard", "delete") => {
