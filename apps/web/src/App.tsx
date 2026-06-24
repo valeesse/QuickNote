@@ -1,4 +1,4 @@
-import React, { Suspense, useEffect, useState } from "react";
+import React, { Suspense, useEffect, useRef, useState } from "react";
 import { LoginPage } from "@/components/LoginPage";
 import { Sidebar } from "@/components/Sidebar";
 import { ClipboardPanel } from "@ui/components/ClipboardPanel";
@@ -73,18 +73,25 @@ function MainApp({ userEmail, onLogout }: { userEmail: string; onLogout: () => v
     title: string;
   } | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const refreshTaskRef = useRef<Promise<void> | null>(null);
 
-  const refreshCloudData = React.useCallback(async () => {
-    setIsRefreshing(true);
-    try {
-      await Promise.all([loadNotes(), clipboard.loadItems()]);
-    } finally {
-      setIsRefreshing(false);
-    }
+  const refreshCloudData = React.useCallback(async ({ showIndicator = false }: { showIndicator?: boolean } = {}) => {
+    if (refreshTaskRef.current) return refreshTaskRef.current;
+    if (showIndicator) setIsRefreshing(true);
+
+    const task = Promise.all([loadNotes(), clipboard.loadItems()])
+      .then(() => undefined)
+      .finally(() => {
+        refreshTaskRef.current = null;
+        if (showIndicator) setIsRefreshing(false);
+      });
+
+    refreshTaskRef.current = task;
+    return task;
   }, [clipboard, loadNotes]);
 
   useCloudEvents(() => {
-    void refreshCloudData();
+    void refreshCloudData({ showIndicator: false });
   });
 
   useEffect(() => {
@@ -279,7 +286,6 @@ function MainApp({ userEmail, onLogout }: { userEmail: string; onLogout: () => v
                   saveStatus={saveStatus}
                   errorMessage={errorMessage}
                   onOpenHistory={handleOpenHistory}
-                  isSyncing={isRefreshing}
                 />
               ) : (
                 <EmptyState
@@ -317,7 +323,7 @@ function MainApp({ userEmail, onLogout }: { userEmail: string; onLogout: () => v
         </button>
         <button
           type="button"
-          onClick={() => void refreshCloudData()}
+          onClick={() => void refreshCloudData({ showIndicator: true })}
           disabled={isRefreshing}
           className={`focus-ring flex items-center justify-center rounded-lg text-sm font-medium ${isRefreshing ? "text-blue-600" : "text-gray-500"}`}
           aria-label={isRefreshing ? "正在刷新云端数据" : "刷新云端数据"}
