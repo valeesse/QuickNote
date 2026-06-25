@@ -88,22 +88,22 @@ pub async fn delete_item(
     Path(id): Path<String>,
 ) -> Result<Json<bool>, AppError> {
     let mut tx = state.db.inner().begin().await?;
-    let query = format!(
-        "UPDATE clipboard_items
-         SET is_deleted=true,updated_at=$3,updated_by=$2
-         WHERE id=$1 AND user_id=$2 AND is_deleted=false
-         RETURNING {COLUMNS}"
-    );
-    let item: Option<ClipboardItem> = sqlx::query_as(&query)
-        .bind(&id)
-        .bind(user_id)
-        .bind(chrono::Utc::now().to_rfc3339())
-        .fetch_optional(&mut *tx)
-        .await?;
+    let item: Option<ClipboardItem> = sqlx::query_as(&format!(
+        "SELECT {COLUMNS} FROM clipboard_items WHERE id=$1 AND user_id=$2 AND is_deleted=false"
+    ))
+    .bind(&id)
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await?;
     let Some(item) = item else {
         tx.rollback().await?;
         return Ok(Json(false));
     };
+    sqlx::query("DELETE FROM clipboard_items WHERE id=$1 AND user_id=$2")
+        .bind(&id)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
     append_change(
         &mut tx,
         user_id,

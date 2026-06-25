@@ -138,10 +138,10 @@ test.beforeEach(async ({ page }) => {
         }
         if (cmd === "delete_clipboard_item") {
           const items = loadClipboard();
-          const item = items.find((entry) => entry.id === args.id);
-          if (item) item.is_deleted = true;
+          const index = items.findIndex((entry) => entry.id === args.id);
+          if (index !== -1) items.splice(index, 1);
           saveClipboard(items);
-          return Boolean(item);
+          return index !== -1;
         }
         if (cmd === "get_sync_config") {
           return {
