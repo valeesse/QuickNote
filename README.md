@@ -1,6 +1,6 @@
 # QuickNote
 
-QuickNote 是一个本地优先、支持云端协作的高性能便签应用。桌面端使用 Tauri + React + SQLite；云端由 Axum、PostgreSQL、SeaweedFS 和 React Web 组成。
+[QuickNote](https://valeesse.github.io/QuickNote/) 是一个本地优先、支持云端协作的高性能便签应用。桌面端使用 Tauri + React + SQLite；云端由 Axum、PostgreSQL、SeaweedFS 和 React Web 组成。
 
 ## 功能
 
