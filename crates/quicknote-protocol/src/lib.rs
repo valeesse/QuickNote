@@ -158,6 +158,29 @@ pub struct SyncEnvelope {
     pub clipboard: Option<ClipboardItem>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct YjsHead {
+    pub schema_version: u32,
+    pub note_id: String,
+    pub snapshot: i64,
+    pub latest_update: i64,
+    pub state_version: i64,
+    pub writer_device: String,
+}
+
+impl YjsHead {
+    pub fn new(note_id: impl Into<String>, writer_device: impl Into<String>) -> Self {
+        Self {
+            schema_version: 3,
+            note_id: note_id.into(),
+            snapshot: 0,
+            latest_update: 0,
+            state_version: 0,
+            writer_device: writer_device.into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
 pub struct BillingPlan {
@@ -230,5 +253,16 @@ mod tests {
             origin: "b".into(),
         };
         assert_eq!(left.relation(&right), CausalRelation::Concurrent);
+    }
+
+    #[test]
+    fn yjs_head_defaults_to_schema_three_empty_cursors() {
+        let head = YjsHead::new("note-a", "device-a");
+        assert_eq!(head.schema_version, 3);
+        assert_eq!(head.note_id, "note-a");
+        assert_eq!(head.snapshot, 0);
+        assert_eq!(head.latest_update, 0);
+        assert_eq!(head.state_version, 0);
+        assert_eq!(head.writer_device, "device-a");
     }
 }

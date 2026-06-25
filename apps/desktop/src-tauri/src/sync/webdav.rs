@@ -113,6 +113,11 @@ impl SyncProvider for WebDavProvider {
             .await?;
         self.create_collection(&format!("state/{device_id}/attachment"))
             .await?;
+        self.create_collection("heads").await?;
+        self.create_collection("heads/notes").await?;
+        self.create_collection("yjs").await?;
+        self.create_collection("yjs/snapshots").await?;
+        self.create_collection("yjs/updates").await?;
         self.create_collection("attachments").await?;
         Ok(())
     }
@@ -219,6 +224,35 @@ mod tests {
             parse_propfind_names(xml, "changes").unwrap(),
             vec!["device one".to_string()]
         );
+    }
+
+    #[tokio::test]
+    async fn prepare_creates_yjs_head_and_update_collections() {
+        let server = MockServer::start().await;
+        for collection_path in [
+            "/",
+            "/state",
+            "/state/device-a",
+            "/state/device-a/note",
+            "/state/device-a/clipboard",
+            "/state/device-a/attachment",
+            "/heads",
+            "/heads/notes",
+            "/yjs",
+            "/yjs/snapshots",
+            "/yjs/updates",
+            "/attachments",
+        ] {
+            Mock::given(method("MKCOL"))
+                .and(path(collection_path))
+                .respond_with(ResponseTemplate::new(201))
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+
+        let provider = WebDavProvider::new(&server.uri(), "user", "pass").unwrap();
+        provider.prepare("device-a").await.unwrap();
     }
 
     #[tokio::test]
