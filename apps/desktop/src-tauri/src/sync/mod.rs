@@ -243,6 +243,8 @@ impl SyncService {
         if config.cloud_enabled && !config.cloud_url.is_empty() {
             let cloud_token = self.get_cloud_token(&mut config).await?;
             let cloud = cloud::CloudProvider::new(&config.cloud_url, &cloud_token);
+            db.ensure_sync_bootstrap(&cloud_bootstrap_scope(&config))
+                .map_err(|e| e.to_string())?;
 
             // Pull from cloud
             let (envelopes, server_seq) = cloud.pull(config.cloud_cursor_seq).await?;
@@ -410,6 +412,10 @@ fn encrypt_value(plaintext: &str, key: &[u8; 32]) -> Result<String, String> {
     combined.extend_from_slice(&nonce_bytes);
     combined.extend_from_slice(&ciphertext);
     Ok(BASE64.encode(&combined))
+}
+
+fn cloud_bootstrap_scope(config: &SyncConfig) -> String {
+    format!("cloud:{}:{}", config.cloud_url, config.cloud_email)
 }
 
 fn decrypt_value(encoded: &str, key: &[u8; 32]) -> Result<String, String> {

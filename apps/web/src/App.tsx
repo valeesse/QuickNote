@@ -1,4 +1,6 @@
 import React, { Suspense, useEffect, useRef, useState } from "react";
+import { billingApi } from "@/api/client";
+import { AccountPanel } from "@/components/AccountPanel";
 import { LoginPage } from "@/components/LoginPage";
 import { Sidebar } from "@/components/Sidebar";
 import { ClipboardPanel } from "@ui/components/ClipboardPanel";
@@ -12,8 +14,8 @@ import { useNotes } from "@/hooks/useNotes";
 import { useClipboard } from "@/hooks/useClipboard";
 import { useCloudEvents } from "@/hooks/useCloudEvents";
 import { attachmentsApi } from "@/api/client";
-import { LogOut, RefreshCw, Search, Trash2, X } from "lucide-react";
-import type { AppView } from "@/types";
+import { LogOut, RefreshCw, Search, Settings, Trash2, X } from "lucide-react";
+import type { AccountSummary, AppView } from "@/types";
 
 const NoteEditor = React.lazy(() =>
   import("@/components/NoteEditor").then((m) => ({ default: m.NoteEditor })),
@@ -82,6 +84,10 @@ function MainApp({ userEmail, onLogout }: { userEmail: string; onLogout: () => v
     title: string;
   } | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [showAccount, setShowAccount] = useState(false);
+  const [accountSummary, setAccountSummary] = useState<AccountSummary | null>(null);
+  const [accountLoading, setAccountLoading] = useState(false);
+  const [accountError, setAccountError] = useState<string | null>(null);
   const refreshTaskRef = useRef<Promise<void> | null>(null);
 
   const resolveClipboardAttachment = React.useCallback(async (id: string) => {
@@ -104,9 +110,46 @@ function MainApp({ userEmail, onLogout }: { userEmail: string; onLogout: () => v
     return task;
   }, [clipboard, loadNotes]);
 
+  const loadAccountSummary = React.useCallback(async () => {
+    try {
+      setAccountLoading(true);
+      setAccountError(null);
+      const summary = await billingApi.summary();
+      setAccountSummary(summary);
+      return summary;
+    } catch (error) {
+      setAccountError(error instanceof Error ? error.message : String(error));
+      return null;
+    } finally {
+      setAccountLoading(false);
+    }
+  }, []);
+
+  const pollAccountSummaryAfterCheckout = React.useCallback(async () => {
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const summary = await loadAccountSummary();
+      if (summary?.subscription?.plan_id === "pro") return;
+      await new Promise((resolve) => window.setTimeout(resolve, 2_000));
+    }
+  }, [loadAccountSummary]);
+
   useCloudEvents(() => {
     void refreshCloudData({ showIndicator: false });
   });
+
+  useEffect(() => {
+    void loadAccountSummary();
+  }, [loadAccountSummary]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("checkout") !== "success") return;
+    params.delete("checkout");
+    const next = params.toString();
+    window.history.replaceState({}, "", `${window.location.pathname}${next ? `?${next}` : ""}`);
+    setShowAccount(true);
+    void pollAccountSummaryAfterCheckout();
+  }, [pollAccountSummaryAfterCheckout]);
 
   useEffect(() => {
     if (!deletedToast) return;
@@ -223,6 +266,11 @@ function MainApp({ userEmail, onLogout }: { userEmail: string; onLogout: () => v
         onCreateNoteFromClipboard={(id) => void handleCreateNoteFromClipboard(id)}
         userEmail={userEmail}
         onLogout={onLogout}
+        onOpenSettings={() => {
+          setShowAccount(true);
+          if (!accountSummary) void loadAccountSummary();
+        }}
+        settingsLabel="账户与订阅"
       />
 
       {/* Main Content */}
@@ -319,7 +367,7 @@ function MainApp({ userEmail, onLogout }: { userEmail: string; onLogout: () => v
       </div>
 
       {/* Mobile bottom nav */}
-      <nav className="fixed inset-x-0 bottom-0 z-30 grid h-14 grid-cols-5 border-t border-gray-200 bg-white/95 px-2 backdrop-blur md:hidden">
+      <nav className="fixed inset-x-0 bottom-0 z-30 grid h-14 grid-cols-6 border-t border-gray-200 bg-white/95 px-2 backdrop-blur md:hidden">
         <button
           type="button"
           onClick={() => changeViewMode("notes")}
@@ -359,6 +407,17 @@ function MainApp({ userEmail, onLogout }: { userEmail: string; onLogout: () => v
           aria-label={showTrash ? "收起回收站" : "打开回收站"}
         >
           <Trash2 className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setShowAccount(true);
+            if (!accountSummary) void loadAccountSummary();
+          }}
+          className={`focus-ring flex items-center justify-center rounded-lg text-sm font-medium ${showAccount ? "text-emerald-600" : "text-gray-500"}`}
+          aria-label="打开账户与订阅"
+        >
+          <Settings className="h-4 w-4" />
         </button>
         <button
           type="button"
@@ -410,6 +469,26 @@ function MainApp({ userEmail, onLogout }: { userEmail: string; onLogout: () => v
           onTogglePin={(versionId) => void toggleVersionPin(activeNote.id, versionId)}
           onDelete={(versionId) => void deleteVersion(activeNote.id, versionId)}
           onClear={() => void clearVersions(activeNote.id)}
+        />
+      )}
+
+      {showAccount && (
+        <AccountPanel
+          summary={accountSummary}
+          loading={accountLoading}
+          error={accountError}
+          onClose={() => setShowAccount(false)}
+          onRefresh={async () => {
+            await loadAccountSummary();
+          }}
+          onCheckout={async (priceId) => {
+            const session = await billingApi.createCheckout({ price_id: priceId });
+            window.location.href = session.checkout_url;
+          }}
+          onManageBilling={async () => {
+            const portal = await billingApi.portal();
+            window.open(portal.management_url, "_blank", "noopener,noreferrer");
+          }}
         />
       )}
     </div>

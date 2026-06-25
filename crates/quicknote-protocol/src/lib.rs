@@ -152,6 +152,63 @@ pub struct SyncEnvelope {
     pub clipboard: Option<ClipboardItem>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
+pub struct BillingPlan {
+    pub id: String,
+    pub name: String,
+    pub tier: String,
+    pub description: String,
+    pub cloud_enabled: bool,
+    pub version_history_days: Option<i32>,
+    pub max_devices: Option<i32>,
+    pub max_attachment_bytes: i64,
+    pub sync_priority: String,
+    pub checkout_cta: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
+pub struct BillingPrice {
+    pub id: String,
+    pub plan_id: String,
+    pub provider: String,
+    pub provider_price_id: String,
+    pub billing_interval: String,
+    pub currency: String,
+    pub unit_amount: i32,
+    pub is_active: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
+pub struct SubscriptionSummary {
+    pub plan_id: String,
+    pub price_id: String,
+    pub provider: String,
+    pub status: String,
+    pub cancel_at_period_end: bool,
+    pub current_period_start: Option<String>,
+    pub current_period_end: Option<String>,
+    pub management_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EntitlementSummary {
+    pub key: String,
+    pub enabled: bool,
+    pub limit: Option<i64>,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UsageMetric {
+    pub key: String,
+    pub used: i64,
+    pub limit: Option<i64>,
+    pub unit: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

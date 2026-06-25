@@ -24,4 +24,6 @@ sha2 = "0.10"
 tokio-stream = { version = "0.1", features = ["sync"] }
 futures = "0.3"
 regex = "1"
+hmac = "0.12"
+hex = "0.4"
 quicknote-protocol = { path = "../../crates/quicknote-protocol", features = ["sqlx"] }

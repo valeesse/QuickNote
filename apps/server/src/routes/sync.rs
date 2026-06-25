@@ -4,6 +4,7 @@ use crate::models::{
     AttachmentRecord, CausalVersion, ClipboardItem, CloudChange, Note, PullRequest, PullResponse,
     PushRequest, PushResponse, SyncEnvelope, SyncEvent,
 };
+use crate::routes::billing::ensure_device_allowed;
 use crate::AppState;
 use axum::extract::State;
 use axum::response::sse::{Event, Sse};
@@ -73,6 +74,7 @@ pub async fn push(
 
     for envelope in &req.envelopes {
         validate_envelope(envelope)?;
+        ensure_device_allowed(&state, user_id, &envelope.device_id).await?;
         let mut tx = state.db.inner().begin().await?;
         let causal_version = next_causal_version(
             &mut tx,
@@ -103,8 +105,8 @@ pub async fn push(
 
         let result = sqlx::query(
             "INSERT INTO cloud_changes
-                (user_id, seq, entity_type, entity_id, operation, source_device, source_seq, envelope)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                (user_id, seq, entity_type, entity_id, operation, source_device, source_seq, envelope, created_by, updated_by)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $1, $1)
              ON CONFLICT (user_id, source_device, source_seq) DO NOTHING",
         )
         .bind(user_id)
@@ -121,6 +123,7 @@ pub async fn push(
         debug_assert_eq!(result.rows_affected(), 1);
 
         apply_to_canonical(&mut tx, user_id, envelope).await?;
+        touch_sync_cursor(&mut tx, user_id, &envelope.device_id, envelope.seq).await?;
         tx.commit().await?;
         acknowledged_sequences.push(envelope.seq);
         accepted += 1;
@@ -184,8 +187,8 @@ pub async fn append_change(
         .map_err(|error| AppError::Internal(format!("Serialize error: {error}")))?;
     sqlx::query(
         "INSERT INTO cloud_changes
-            (user_id, seq, entity_type, entity_id, operation, source_device, source_seq, envelope)
-         VALUES ($1, $2, $3, $4, $5, 'cloud', $2, $6)",
+            (user_id, seq, entity_type, entity_id, operation, source_device, source_seq, envelope, created_by, updated_by)
+         VALUES ($1, $2, $3, $4, $5, 'cloud', $2, $6, $1, $1)",
     )
     .bind(user_id)
     .bind(seq)
@@ -208,7 +211,9 @@ async fn next_causal_version(
     let empty = serde_json::to_value(CausalVersion::default())
         .map_err(|error| AppError::Internal(error.to_string()))?;
     sqlx::query(
-        "INSERT INTO entity_versions (user_id,entity_type,entity_id,version) VALUES ($1,$2,$3,$4)
+        "INSERT INTO entity_versions
+            (user_id,entity_type,entity_id,version,created_by,updated_by)
+         VALUES ($1,$2,$3,$4,$1,$1)
          ON CONFLICT (user_id,entity_type,entity_id) DO NOTHING",
     )
     .bind(user_id)
@@ -229,8 +234,17 @@ async fn next_causal_version(
     next.increment("cloud");
     let encoded =
         serde_json::to_value(&next).map_err(|error| AppError::Internal(error.to_string()))?;
-    sqlx::query("UPDATE entity_versions SET version=$4 WHERE user_id=$1 AND entity_type=$2 AND entity_id=$3")
-        .bind(user_id).bind(entity_type).bind(entity_id).bind(encoded).execute(&mut **tx).await?;
+    sqlx::query(
+        "UPDATE entity_versions
+         SET version=$4, updated_at=NOW(), updated_by=$1
+         WHERE user_id=$1 AND entity_type=$2 AND entity_id=$3",
+    )
+    .bind(user_id)
+    .bind(entity_type)
+    .bind(entity_id)
+    .bind(encoded)
+    .execute(&mut **tx)
+    .await?;
     Ok(next)
 }
 
@@ -241,7 +255,7 @@ async fn apply_to_canonical(
 ) -> Result<(), AppError> {
     match (envelope.entity_type.as_str(), envelope.operation.as_str()) {
         ("note", "delete") => {
-            sqlx::query("UPDATE notes SET is_deleted = true, updated_at = $3 WHERE user_id = $1 AND id = $2")
+            sqlx::query("UPDATE notes SET is_deleted = true, updated_at = $3, updated_by = $1 WHERE user_id = $1 AND id = $2")
                 .bind(user_id).bind(&envelope.entity_id).bind(&envelope.changed_at)
                 .execute(&mut **tx).await?;
         }
@@ -251,17 +265,18 @@ async fn apply_to_canonical(
                 .as_ref()
                 .ok_or_else(|| AppError::BadRequest("Note upsert is missing its payload".into()))?;
             sqlx::query(
-                "INSERT INTO notes (user_id, id, title, content, is_pinned, sort_order, created_at, updated_at, version, is_deleted)
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-                 ON CONFLICT (user_id,id) DO UPDATE SET title=EXCLUDED.title, content=EXCLUDED.content,
+                "INSERT INTO notes
+                    (user_id, id, title, content, is_pinned, sort_order, created_at, updated_at, version, is_deleted, created_by, updated_by)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$1,$1)
+                  ON CONFLICT (user_id,id) DO UPDATE SET title=EXCLUDED.title, content=EXCLUDED.content,
                  is_pinned=EXCLUDED.is_pinned, sort_order=EXCLUDED.sort_order, updated_at=EXCLUDED.updated_at,
-                 version=EXCLUDED.version, is_deleted=EXCLUDED.is_deleted",
+                 version=EXCLUDED.version, is_deleted=EXCLUDED.is_deleted, updated_by=EXCLUDED.updated_by",
             ).bind(user_id).bind(&note.id).bind(&note.title).bind(&note.content).bind(note.is_pinned)
                 .bind(note.sort_order).bind(&note.created_at).bind(&note.updated_at).bind(note.version).bind(note.is_deleted)
                 .execute(&mut **tx).await?;
         }
         ("clipboard", "delete") => {
-            sqlx::query("UPDATE clipboard_items SET is_deleted = true, updated_at = $3 WHERE user_id = $1 AND id = $2")
+            sqlx::query("UPDATE clipboard_items SET is_deleted = true, updated_at = $3, updated_by = $1 WHERE user_id = $1 AND id = $2")
                 .bind(user_id).bind(&envelope.entity_id).bind(&envelope.changed_at)
                 .execute(&mut **tx).await?;
         }
@@ -270,12 +285,13 @@ async fn apply_to_canonical(
                 AppError::BadRequest("Clipboard upsert is missing its payload".into())
             })?;
             sqlx::query(
-                "INSERT INTO clipboard_items (user_id,id,kind,content,preview,source_device,created_at,updated_at,last_copied_at,capture_count,is_pinned,is_deleted)
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-                 ON CONFLICT (user_id,id) DO UPDATE SET kind=EXCLUDED.kind, content=EXCLUDED.content,
-                 preview=EXCLUDED.preview, source_device=EXCLUDED.source_device, updated_at=EXCLUDED.updated_at,
-                 last_copied_at=EXCLUDED.last_copied_at, capture_count=EXCLUDED.capture_count,
-                 is_pinned=EXCLUDED.is_pinned, is_deleted=EXCLUDED.is_deleted",
+                "INSERT INTO clipboard_items
+                    (user_id,id,kind,content,preview,source_device,created_at,updated_at,last_copied_at,capture_count,is_pinned,is_deleted,created_by,updated_by)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$1,$1)
+                  ON CONFLICT (user_id,id) DO UPDATE SET kind=EXCLUDED.kind, content=EXCLUDED.content,
+                  preview=EXCLUDED.preview, source_device=EXCLUDED.source_device, updated_at=EXCLUDED.updated_at,
+                  last_copied_at=EXCLUDED.last_copied_at, capture_count=EXCLUDED.capture_count,
+                  is_pinned=EXCLUDED.is_pinned, is_deleted=EXCLUDED.is_deleted, updated_by=EXCLUDED.updated_by",
             ).bind(user_id).bind(&item.id).bind(&item.kind).bind(&item.content).bind(&item.preview)
                 .bind(&item.source_device).bind(&item.created_at).bind(&item.updated_at)
                 .bind(&item.last_copied_at).bind(item.capture_count).bind(item.is_pinned).bind(item.is_deleted)
@@ -306,6 +322,30 @@ async fn apply_to_canonical(
         }
         _ => return Err(AppError::BadRequest("Unsupported sync operation".into())),
     }
+    Ok(())
+}
+
+async fn touch_sync_cursor(
+    tx: &mut Transaction<'_, Postgres>,
+    user_id: Uuid,
+    device_id: &str,
+    cursor_seq: i64,
+) -> Result<(), AppError> {
+    sqlx::query(
+        "INSERT INTO sync_cursors
+            (user_id, device_id, cursor_seq, created_at, updated_at, created_by, updated_by)
+         VALUES ($1, $2, $3, NOW(), NOW(), $1, $1)
+         ON CONFLICT (user_id, device_id)
+         DO UPDATE SET
+            cursor_seq = GREATEST(sync_cursors.cursor_seq, EXCLUDED.cursor_seq),
+            updated_at = NOW(),
+            updated_by = EXCLUDED.updated_by",
+    )
+    .bind(user_id)
+    .bind(device_id)
+    .bind(cursor_seq)
+    .execute(&mut **tx)
+    .await?;
     Ok(())
 }
 

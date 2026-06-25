@@ -1311,6 +1311,8 @@ dependencies = [
  "axum-extra",
  "chrono",
  "futures",
+ "hex",
+ "hmac",
  "jsonwebtoken",
  "password-hash",
  "quicknote-protocol",

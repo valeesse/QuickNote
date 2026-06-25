@@ -40,13 +40,15 @@ pub async fn register(
 
     let user_id = Uuid::new_v4();
 
-    let insert_result =
-        sqlx::query("INSERT INTO users (id, email, password_hash) VALUES ($1, $2, $3)")
-            .bind(user_id)
-            .bind(&email)
-            .bind(&password_hash)
-            .execute(state.db.inner())
-            .await;
+    let insert_result = sqlx::query(
+        "INSERT INTO users (id, email, password_hash, updated_at, created_by, updated_by)
+         VALUES ($1, $2, $3, NOW(), $1, $1)",
+    )
+    .bind(user_id)
+    .bind(&email)
+    .bind(&password_hash)
+    .execute(state.db.inner())
+    .await;
     if let Err(e) = insert_result {
         record_failure(&state, &client_ip, &email).await;
         return Err(if let sqlx::Error::Database(ref db_err) = e {

@@ -1,6 +1,13 @@
 export type {
   AppView,
+  AccountSummary,
   AttachmentRecord,
+  BillingPlan,
+  BillingPrice,
+  BillingPortalResponse,
+  CheckoutSessionResponse,
+  CreateCheckoutRequest,
+  EntitlementSummary,
   AuthResponse,
   AuthUser,
   ClipboardItem,
@@ -8,4 +15,6 @@ export type {
   NoteSummary,
   NoteVersion,
   SaveStatus,
+  SubscriptionSummary,
+  UsageMetric,
 } from "@contracts";

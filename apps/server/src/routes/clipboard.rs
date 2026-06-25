@@ -46,7 +46,18 @@ pub async fn capture(
     let now = chrono::Utc::now().to_rfc3339();
     let preview = clipboard_preview(&normalized, &kind);
     let mut tx = state.db.inner().begin().await?;
-    let query = format!("INSERT INTO clipboard_items (id,user_id,kind,content,preview,source_device,created_at,updated_at,last_copied_at,capture_count,is_pinned,is_deleted) VALUES ($1,$2,$3,$4,$5,$6,$7,$7,$7,1,false,false) ON CONFLICT (user_id,id) DO UPDATE SET capture_count=clipboard_items.capture_count+1,last_copied_at=EXCLUDED.last_copied_at,updated_at=EXCLUDED.updated_at,is_deleted=false RETURNING {COLUMNS}");
+    let query = format!(
+        "INSERT INTO clipboard_items
+            (id,user_id,kind,content,preview,source_device,created_at,updated_at,last_copied_at,capture_count,is_pinned,is_deleted,created_by,updated_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$7,$7,1,false,false,$2,$2)
+         ON CONFLICT (user_id,id) DO UPDATE SET
+            capture_count=clipboard_items.capture_count+1,
+            last_copied_at=EXCLUDED.last_copied_at,
+            updated_at=EXCLUDED.updated_at,
+            is_deleted=false,
+            updated_by=EXCLUDED.updated_by
+         RETURNING {COLUMNS}"
+    );
     let item: ClipboardItem = sqlx::query_as(&query)
         .bind(&id)
         .bind(user_id)
@@ -77,7 +88,12 @@ pub async fn delete_item(
     Path(id): Path<String>,
 ) -> Result<Json<bool>, AppError> {
     let mut tx = state.db.inner().begin().await?;
-    let query = format!("UPDATE clipboard_items SET is_deleted=true,updated_at=$3 WHERE id=$1 AND user_id=$2 AND is_deleted=false RETURNING {COLUMNS}");
+    let query = format!(
+        "UPDATE clipboard_items
+         SET is_deleted=true,updated_at=$3,updated_by=$2
+         WHERE id=$1 AND user_id=$2 AND is_deleted=false
+         RETURNING {COLUMNS}"
+    );
     let item: Option<ClipboardItem> = sqlx::query_as(&query)
         .bind(&id)
         .bind(user_id)
@@ -108,7 +124,12 @@ pub async fn toggle_pin(
     Path(id): Path<String>,
 ) -> Result<Json<bool>, AppError> {
     let mut tx = state.db.inner().begin().await?;
-    let query = format!("UPDATE clipboard_items SET is_pinned=NOT is_pinned,updated_at=$3 WHERE id=$1 AND user_id=$2 AND is_deleted=false RETURNING {COLUMNS}");
+    let query = format!(
+        "UPDATE clipboard_items
+         SET is_pinned=NOT is_pinned,updated_at=$3,updated_by=$2
+         WHERE id=$1 AND user_id=$2 AND is_deleted=false
+         RETURNING {COLUMNS}"
+    );
     let item: Option<ClipboardItem> = sqlx::query_as(&query)
         .bind(&id)
         .bind(user_id)

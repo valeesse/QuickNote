@@ -40,6 +40,7 @@ export interface SidebarProps {
   syncStatus?: SidebarSyncStatus;
   onSync?: () => void;
   onOpenSettings?: () => void;
+  settingsLabel?: string;
   userEmail?: string;
   onLogout?: () => void;
 }
@@ -73,6 +74,7 @@ export function Sidebar({
   syncStatus,
   onSync,
   onOpenSettings,
+  settingsLabel = "设置",
   userEmail,
   onLogout,
 }: SidebarProps) {
@@ -393,8 +395,8 @@ export function Sidebar({
             type="button"
             onClick={onOpenSettings}
             className="focus-ring flex h-8 w-8 items-center justify-center rounded text-gray-500 hover:bg-gray-100"
-            title="同步设置"
-            aria-label="打开同步设置"
+            title={settingsLabel}
+            aria-label={settingsLabel}
           >
             <Settings className="h-4 w-4" />
           </button>

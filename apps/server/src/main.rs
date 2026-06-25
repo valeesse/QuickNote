@@ -82,6 +82,19 @@ async fn main() {
         .route("/api/auth/refresh", post(routes::auth::refresh))
         .route("/api/auth/me", get(routes::auth::me))
         .route("/api/auth/logout", post(routes::auth::logout))
+        .route(
+            "/api/account/summary",
+            get(routes::billing::account_summary),
+        )
+        .route(
+            "/api/billing/checkout",
+            post(routes::billing::create_checkout),
+        )
+        .route("/api/billing/portal", post(routes::billing::billing_portal))
+        .route(
+            "/api/billing/webhooks/lemonsqueezy",
+            post(routes::billing::lemonsqueezy_webhook),
+        )
         // Notes (protected)
         .route(
             "/api/notes",

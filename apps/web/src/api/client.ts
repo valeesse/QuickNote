@@ -1,4 +1,10 @@
-import type { AuthResponse } from "@/types";
+import type {
+  AccountSummary,
+  AuthResponse,
+  BillingPortalResponse,
+  CheckoutSessionResponse,
+  CreateCheckoutRequest,
+} from "@/types";
 
 const USER_KEY = "quicknote-user";
 const AUTH_EXPIRED_EVENT = "quicknote-auth-expired";
@@ -203,4 +209,17 @@ export const attachmentsApi = {
     const response = await authenticatedFetch(`/api/attachments/${id}`, { method: "GET" });
     return response.blob();
   },
+};
+
+export const billingApi = {
+  summary: () => apiFetch<AccountSummary>("/api/account/summary"),
+  createCheckout: (payload: CreateCheckoutRequest) =>
+    apiFetch<CheckoutSessionResponse>("/api/billing/checkout", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  portal: () =>
+    apiFetch<BillingPortalResponse>("/api/billing/portal", {
+      method: "POST",
+    }),
 };

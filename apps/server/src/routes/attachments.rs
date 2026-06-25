@@ -1,6 +1,7 @@
 use crate::error::AppError;
 use crate::middleware::AuthUser;
 use crate::models::AttachmentRecord;
+use crate::routes::billing::ensure_attachment_quota;
 use crate::routes::sync::{append_change, ChangePayload};
 use crate::AppState;
 use axum::body::Bytes;
@@ -26,6 +27,15 @@ pub async fn upload(
             "Attachment must be between 1 byte and 20 MB".into(),
         ));
     }
+    let existing_size: i64 = sqlx::query_scalar(
+        "SELECT COALESCE((SELECT size FROM attachments WHERE user_id = $1 AND id = $2), 0)",
+    )
+    .bind(user_id)
+    .bind(&id)
+    .fetch_one(state.db.inner())
+    .await?;
+    let additional_bytes = (body.len() as i64 - existing_size).max(0);
+    ensure_attachment_quota(&state, user_id, additional_bytes).await?;
     let actual_id = format!("{:x}", Sha256::digest(&body));
     if actual_id != id.to_ascii_lowercase() {
         return Err(AppError::BadRequest(
@@ -73,9 +83,24 @@ pub async fn upload(
             .bind(&id)
             .fetch_one(&mut *tx)
             .await?;
-    sqlx::query("INSERT INTO attachments (user_id,id,relative_path,mime_type,size,created_at) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (user_id,id) DO UPDATE SET mime_type=EXCLUDED.mime_type,size=EXCLUDED.size")
-        .bind(user_id).bind(&record.id).bind(&record.relative_path).bind(&record.mime_type).bind(record.size).bind(&record.created_at)
-        .execute(&mut *tx).await?;
+    sqlx::query(
+        "INSERT INTO attachments
+            (user_id,id,relative_path,mime_type,size,created_at,updated_at,created_by,updated_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$6,$1,$1)
+         ON CONFLICT (user_id,id) DO UPDATE SET
+            mime_type=EXCLUDED.mime_type,
+            size=EXCLUDED.size,
+            updated_at=EXCLUDED.updated_at,
+            updated_by=EXCLUDED.updated_by",
+    )
+    .bind(user_id)
+    .bind(&record.id)
+    .bind(&record.relative_path)
+    .bind(&record.mime_type)
+    .bind(record.size)
+    .bind(&record.created_at)
+    .execute(&mut *tx)
+    .await?;
     if !existed {
         append_change(
             &mut tx,

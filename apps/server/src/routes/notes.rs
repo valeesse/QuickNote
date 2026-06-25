@@ -4,6 +4,7 @@ use crate::models::{
     CreateNoteRequest, Note, NoteSummary, NoteVersion, ReorderNotesRequest, UpdateNoteRequest,
 };
 use crate::routes::attachments::delete_attachment_object;
+use crate::routes::billing::version_history_cutoff;
 use crate::routes::sync::{append_change, ChangePayload};
 use crate::AppState;
 use axum::extract::{Path, Query, State};
@@ -32,7 +33,11 @@ pub async fn create_note(
     .bind(user_id)
     .fetch_one(&mut *tx)
     .await?;
-    let query = format!("INSERT INTO notes (id,user_id,title,content,is_pinned,sort_order,created_at,updated_at,version,is_deleted) VALUES ($1,$2,$3,$4,false,$5,$6,$6,1,false) RETURNING {NOTE_COLUMNS}");
+    let query = format!(
+        "INSERT INTO notes (id,user_id,title,content,is_pinned,sort_order,created_at,updated_at,version,is_deleted,created_by,updated_by)
+         VALUES ($1,$2,$3,$4,false,$5,$6,$6,1,false,$2,$2)
+         RETURNING {NOTE_COLUMNS}"
+    );
     let note: Note = sqlx::query_as(&query)
         .bind(&id)
         .bind(user_id)
@@ -89,7 +94,12 @@ pub async fn reorder_notes(
     let mut tx = state.db.inner().begin().await?;
     let len = req.ids.len() as i64;
     for (index, id) in req.ids.iter().enumerate() {
-        let query = format!("UPDATE notes SET is_pinned=$3,sort_order=$4,updated_at=$5 WHERE id=$1 AND user_id=$2 AND is_deleted=false RETURNING {NOTE_COLUMNS}");
+        let query = format!(
+            "UPDATE notes
+             SET is_pinned=$3,sort_order=$4,updated_at=$5,updated_by=$2
+             WHERE id=$1 AND user_id=$2 AND is_deleted=false
+             RETURNING {NOTE_COLUMNS}"
+        );
         let note: Option<Note> = sqlx::query_as(&query)
             .bind(id)
             .bind(user_id)
@@ -123,9 +133,10 @@ pub async fn update_note(
 ) -> Result<Json<Note>, AppError> {
     let now = chrono::Utc::now().to_rfc3339();
     let title = extract_title(&req.content);
+    let version_cutoff = version_history_cutoff(&state, user_id).await?;
     let mut tx = state.db.inner().begin().await?;
 
-    // Snapshot current version before updating (keep max 10 unpinned versions)
+    // Snapshot current version before updating, then prune by plan policy.
     let existing: Option<Note> = sqlx::query_as(&format!(
         "SELECT {NOTE_COLUMNS} FROM notes WHERE id=$1 AND user_id=$2 AND is_deleted=false"
     ))
@@ -134,7 +145,11 @@ pub async fn update_note(
     .fetch_optional(&mut *tx)
     .await?;
     if let Some(old) = existing {
-        sqlx::query("INSERT INTO note_versions (note_id,user_id,title,content,version,created_at,is_pinned) VALUES ($1,$2,$3,$4,$5,$6,false)")
+        sqlx::query(
+            "INSERT INTO note_versions
+                (note_id,user_id,title,content,version,created_at,updated_at,is_pinned,created_by,updated_by)
+             VALUES ($1,$2,$3,$4,$5,$6,$6,false,$2,$2)",
+        )
             .bind(&id)
             .bind(user_id)
             .bind(&old.title)
@@ -143,15 +158,24 @@ pub async fn update_note(
             .bind(&old.updated_at)
             .execute(&mut *tx)
             .await?;
-        // Prune unpinned versions beyond 10
-        sqlx::query("DELETE FROM note_versions WHERE id IN (SELECT id FROM note_versions WHERE note_id=$1 AND user_id=$2 AND is_pinned=false ORDER BY created_at DESC OFFSET 10)")
-            .bind(&id)
+        if let Some(cutoff) = version_cutoff.as_deref() {
+            sqlx::query(
+                "DELETE FROM note_versions
+                 WHERE user_id=$1 AND is_pinned=false AND created_at < $2",
+            )
             .bind(user_id)
+            .bind(cutoff)
             .execute(&mut *tx)
             .await?;
+        }
     }
 
-    let query = format!("UPDATE notes SET content=$3,title=$4,updated_at=$5,version=version+1 WHERE id=$1 AND user_id=$2 AND is_deleted=false RETURNING {NOTE_COLUMNS}");
+    let query = format!(
+        "UPDATE notes
+         SET content=$3,title=$4,updated_at=$5,version=version+1,updated_by=$2
+         WHERE id=$1 AND user_id=$2 AND is_deleted=false
+         RETURNING {NOTE_COLUMNS}"
+    );
     let note: Note = sqlx::query_as(&query)
         .bind(&id)
         .bind(user_id)
@@ -175,12 +199,37 @@ pub async fn update_note(
     Ok(Json(note))
 }
 
+pub async fn prune_versions_to_plan_window(
+    state: &AppState,
+    user_id: Uuid,
+) -> Result<(), AppError> {
+    let Some(cutoff) = version_history_cutoff(state, user_id).await? else {
+        return Ok(());
+    };
+    sqlx::query(
+        "DELETE FROM note_versions
+         WHERE user_id=$1 AND is_pinned=false AND created_at < $2",
+    )
+    .bind(user_id)
+    .bind(cutoff)
+    .execute(state.db.inner())
+    .await?;
+    Ok(())
+}
+
 pub async fn delete_note(
     State(state): State<Arc<AppState>>,
     AuthUser(user_id): AuthUser,
     Path(id): Path<String>,
 ) -> Result<Json<bool>, AppError> {
-    mutate_flag(&state, user_id, &id, "UPDATE notes SET is_deleted=true,updated_at=$3 WHERE id=$1 AND user_id=$2 AND is_deleted=false", "delete").await
+    mutate_flag(
+        &state,
+        user_id,
+        &id,
+        "UPDATE notes SET is_deleted=true,updated_at=$3,updated_by=$4 WHERE id=$1 AND user_id=$2 AND is_deleted=false",
+        "delete",
+    )
+    .await
 }
 
 pub async fn restore_note(
@@ -188,7 +237,14 @@ pub async fn restore_note(
     AuthUser(user_id): AuthUser,
     Path(id): Path<String>,
 ) -> Result<Json<bool>, AppError> {
-    mutate_flag(&state, user_id, &id, "UPDATE notes SET is_deleted=false,updated_at=$3 WHERE id=$1 AND user_id=$2 AND is_deleted=true", "upsert").await
+    mutate_flag(
+        &state,
+        user_id,
+        &id,
+        "UPDATE notes SET is_deleted=false,updated_at=$3,updated_by=$4 WHERE id=$1 AND user_id=$2 AND is_deleted=true",
+        "upsert",
+    )
+    .await
 }
 
 pub async fn toggle_pin(
@@ -215,7 +271,12 @@ pub async fn toggle_pin(
         .bind(target_pinned)
         .fetch_one(&mut *tx)
         .await?;
-        let query = format!("UPDATE notes SET is_pinned=$3,sort_order=$4,updated_at=$5 WHERE id=$1 AND user_id=$2 AND is_deleted=false RETURNING {NOTE_COLUMNS}");
+        let query = format!(
+            "UPDATE notes
+             SET is_pinned=$3,sort_order=$4,updated_at=$5,updated_by=$2
+             WHERE id=$1 AND user_id=$2 AND is_deleted=false
+             RETURNING {NOTE_COLUMNS}"
+        );
         let note: Option<Note> = sqlx::query_as(&query)
             .bind(&id)
             .bind(user_id)
@@ -255,6 +316,7 @@ async fn mutate_flag(
         .bind(id)
         .bind(user_id)
         .bind(chrono::Utc::now().to_rfc3339())
+        .bind(user_id)
         .execute(&mut *tx)
         .await?;
     if result.rows_affected() == 0 {
@@ -344,10 +406,6 @@ pub async fn purge_note(
         }
     }
 
-    for attachment_id in &orphaned_attachments {
-        delete_attachment_object(&state, user_id, attachment_id).await?;
-    }
-
     sqlx::query("DELETE FROM note_versions WHERE note_id=$1 AND user_id=$2")
         .bind(&id)
         .bind(user_id)
@@ -366,6 +424,16 @@ pub async fn purge_note(
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
+    for attachment_id in &orphaned_attachments {
+        if let Err(error) = delete_attachment_object(&state, user_id, attachment_id).await {
+            tracing::warn!(
+                user_id = %user_id,
+                attachment_id,
+                error = %error,
+                "attachment object cleanup failed after note purge"
+            );
+        }
+    }
     notify(&state, user_id, &id, "delete");
     Ok(Json(true))
 }
@@ -375,13 +443,30 @@ pub async fn list_versions(
     AuthUser(user_id): AuthUser,
     Path(id): Path<String>,
 ) -> Result<Json<Vec<NoteVersion>>, AppError> {
-    let versions = sqlx::query_as(
-        "SELECT id,note_id,title,content,version,created_at,is_pinned FROM note_versions WHERE note_id=$1 AND user_id=$2 ORDER BY created_at DESC",
-    )
-    .bind(&id)
-    .bind(user_id)
-    .fetch_all(state.db.inner())
-    .await?;
+    let versions = if let Some(cutoff) = version_history_cutoff(&state, user_id).await? {
+        sqlx::query_as(
+            "SELECT id,note_id,title,content,version,created_at,is_pinned
+             FROM note_versions
+             WHERE note_id=$1 AND user_id=$2 AND created_at >= $3
+             ORDER BY created_at DESC",
+        )
+        .bind(&id)
+        .bind(user_id)
+        .bind(cutoff)
+        .fetch_all(state.db.inner())
+        .await?
+    } else {
+        sqlx::query_as(
+            "SELECT id,note_id,title,content,version,created_at,is_pinned
+             FROM note_versions
+             WHERE note_id=$1 AND user_id=$2
+             ORDER BY created_at DESC",
+        )
+        .bind(&id)
+        .bind(user_id)
+        .fetch_all(state.db.inner())
+        .await?
+    };
     Ok(Json(versions))
 }
 
@@ -403,9 +488,21 @@ pub async fn restore_version(
     .fetch_optional(&mut *tx)
     .await?;
     let ver = ver.ok_or(AppError::NotFound)?;
+    if let Some(cutoff) = version_history_cutoff(&state, user_id).await? {
+        if ver.created_at < cutoff {
+            return Err(AppError::BadRequest(
+                "This version is outside the current plan's history window.".into(),
+            ));
+        }
+    }
 
     // Update the note with version content
-    let query = format!("UPDATE notes SET content=$3,title=$4,updated_at=$5,version=version+1 WHERE id=$1 AND user_id=$2 AND is_deleted=false RETURNING {NOTE_COLUMNS}");
+    let query = format!(
+        "UPDATE notes
+         SET content=$3,title=$4,updated_at=$5,version=version+1,updated_by=$2
+         WHERE id=$1 AND user_id=$2 AND is_deleted=false
+         RETURNING {NOTE_COLUMNS}"
+    );
     let note: Note = sqlx::query_as(&query)
         .bind(&note_id)
         .bind(user_id)
@@ -435,12 +532,16 @@ pub async fn toggle_version_pin(
     AuthUser(user_id): AuthUser,
     Path(version_id): Path<i64>,
 ) -> Result<Json<bool>, AppError> {
-    let result =
-        sqlx::query("UPDATE note_versions SET is_pinned=NOT is_pinned WHERE id=$1 AND user_id=$2")
-            .bind(version_id)
-            .bind(user_id)
-            .execute(state.db.inner())
-            .await?;
+    let result = sqlx::query(
+        "UPDATE note_versions
+             SET is_pinned=NOT is_pinned, updated_at=$3, updated_by=$2
+             WHERE id=$1 AND user_id=$2",
+    )
+    .bind(version_id)
+    .bind(user_id)
+    .bind(chrono::Utc::now().to_rfc3339())
+    .execute(state.db.inner())
+    .await?;
     Ok(Json(result.rows_affected() > 0))
 }
 

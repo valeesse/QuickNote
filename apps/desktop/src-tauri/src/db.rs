@@ -1983,6 +1983,29 @@ mod tests {
     }
 
     #[test]
+    fn bootstrap_can_requeue_historical_data_for_a_new_cloud_scope() {
+        let (_dir, db) = database();
+        let note = db.create_note("<p>历史数据</p>").unwrap();
+
+        for change in db.list_pending_changes(20).unwrap() {
+            db.mark_change_synced(change.seq).unwrap();
+        }
+        assert!(db.list_pending_changes(20).unwrap().is_empty());
+
+        db.ensure_sync_bootstrap("cloud:https://cloud.test:user@example.com")
+            .unwrap();
+
+        let pending = db.list_pending_changes(20).unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].entity_type, "note");
+        assert_eq!(pending[0].entity_id, note.id);
+
+        db.ensure_sync_bootstrap("cloud:https://cloud.test:user@example.com")
+            .unwrap();
+        assert_eq!(db.list_pending_changes(20).unwrap().len(), 1);
+    }
+
+    #[test]
     fn concurrent_clipboard_metadata_converges_by_causal_version() {
         let (_dir_a, db_a) = database();
         let (_dir_b, db_b) = database();
