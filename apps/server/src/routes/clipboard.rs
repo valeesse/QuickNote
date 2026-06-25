@@ -37,7 +37,10 @@ pub async fn capture(
         ));
     }
     let normalized = normalize_clipboard_content(&req.content);
-    let id = format!("{:x}", Sha256::digest(format!("clipboard:text:{normalized}")));
+    let id = format!(
+        "{:x}",
+        Sha256::digest(format!("clipboard:text:{normalized}"))
+    );
     let kind = req.kind.unwrap_or_else(|| detect_kind(&normalized));
     let device = req.source_device.unwrap_or_else(|| "web".into());
     let now = chrono::Utc::now().to_rfc3339();
@@ -169,10 +172,12 @@ fn looks_like_rich_clipboard(content: &str) -> bool {
 }
 
 fn count_html_block_tags(lowered: &str) -> usize {
-    ["<p", "<div", "<section", "<article", "<h1", "<h2", "<h3", "<h4", "<h5", "<h6"]
-        .iter()
-        .map(|needle| lowered.matches(needle).count())
-        .sum()
+    [
+        "<p", "<div", "<section", "<article", "<h1", "<h2", "<h3", "<h4", "<h5", "<h6",
+    ]
+    .iter()
+    .map(|needle| lowered.matches(needle).count())
+    .sum()
 }
 
 fn clipboard_preview(content: &str, kind: &str) -> String {

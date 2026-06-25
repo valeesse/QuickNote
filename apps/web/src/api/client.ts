@@ -1,14 +1,10 @@
 import type { AuthResponse } from "@/types";
 
-const TOKEN_KEY = "quicknote-token";
 const USER_KEY = "quicknote-user";
+const AUTH_EXPIRED_EVENT = "quicknote-auth-expired";
 
-function getBaseUrl(): string {
+export function getBaseUrl(): string {
   return import.meta.env.VITE_API_BASE_URL || "";
-}
-
-export function getToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY);
 }
 
 export function getStoredUser(): AuthResponse["user"] | null {
@@ -21,14 +17,18 @@ export function getStoredUser(): AuthResponse["user"] | null {
   }
 }
 
-export function setAuth(token: string, user: AuthResponse["user"]): void {
-  localStorage.setItem(TOKEN_KEY, token);
+export function setAuth(_token: string, user: AuthResponse["user"]): void {
   localStorage.setItem(USER_KEY, JSON.stringify(user));
 }
 
 export function clearAuth(): void {
-  localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
+}
+
+export function subscribeToAuthExpiry(onExpire: () => void): () => void {
+  const handler = () => onExpire();
+  window.addEventListener(AUTH_EXPIRED_EVENT, handler);
+  return () => window.removeEventListener(AUTH_EXPIRED_EVENT, handler);
 }
 
 export class ApiError extends Error {
@@ -40,25 +40,40 @@ export class ApiError extends Error {
   }
 }
 
+function notifyAuthExpired(): void {
+  clearAuth();
+  window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
+}
+
+function shouldNotifyAuthExpiry(path: string): boolean {
+  return !path.startsWith("/api/auth/login") && !path.startsWith("/api/auth/register");
+}
+
+function buildFetchOptions(options: RequestInit): RequestInit {
+  return {
+    ...options,
+    credentials: "include",
+  };
+}
+
 export async function apiFetch<T>(
   path: string,
   options: RequestInit = {},
 ): Promise<T> {
-  const token = getToken();
   const headers: Record<string, string> = {
-    "Content-Type": "application/json",
     ...(options.headers as Record<string, string>),
   };
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
+  if (options.body !== undefined && !headers["Content-Type"]) {
+    headers["Content-Type"] = "application/json";
   }
 
-  const res = await fetch(`${getBaseUrl()}${path}`, {
+  const res = await fetch(`${getBaseUrl()}${path}`, buildFetchOptions({
     ...options,
     headers,
-  });
+  }));
 
   if (!res.ok) {
+    if (res.status === 401 && shouldNotifyAuthExpiry(path)) notifyAuthExpired();
     let message = res.statusText;
     try {
       const body = await res.json();
@@ -76,11 +91,15 @@ export async function apiFetch<T>(
 }
 
 async function authenticatedFetch(path: string, options: RequestInit): Promise<Response> {
-  const token = getToken();
   const headers = new Headers(options.headers);
-  if (token) headers.set("Authorization", `Bearer ${token}`);
-  const response = await fetch(`${getBaseUrl()}${path}`, { ...options, headers });
-  if (!response.ok) throw new ApiError(response.status, response.statusText);
+  const response = await fetch(
+    `${getBaseUrl()}${path}`,
+    buildFetchOptions({ ...options, headers }),
+  );
+  if (!response.ok) {
+    if (response.status === 401 && shouldNotifyAuthExpiry(path)) notifyAuthExpired();
+    throw new ApiError(response.status, response.statusText);
+  }
   return response;
 }
 
@@ -96,8 +115,11 @@ export const authApi = {
       method: "POST",
       body: JSON.stringify({ email, password }),
     }),
+  me: () => apiFetch<AuthResponse["user"]>("/api/auth/me"),
   refresh: () =>
     apiFetch<{ token: string }>("/api/auth/refresh", { method: "POST" }),
+  logout: () =>
+    apiFetch<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
 };
 
 // Notes API

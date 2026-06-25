@@ -1,13 +1,12 @@
 use crate::error::AppError;
 use crate::AppState;
-use axum::{
-    extract::FromRequestParts,
-    http::request::Parts,
-};
+use axum::{extract::FromRequestParts, http::request::Parts};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
+
+pub const SESSION_COOKIE_NAME: &str = "quicknote_session";
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {
@@ -25,18 +24,22 @@ impl FromRequestParts<Arc<AppState>> for AuthUser {
         parts: &mut Parts,
         state: &Arc<AppState>,
     ) -> Result<Self, Self::Rejection> {
-        let auth_header = parts
+        let token = parts
             .headers
             .get("Authorization")
             .and_then(|v| v.to_str().ok())
-            .ok_or(AppError::Auth)?;
-
-        let token = auth_header
-            .strip_prefix("Bearer ")
+            .and_then(|value| value.strip_prefix("Bearer ").map(ToOwned::to_owned))
+            .or_else(|| {
+                parts
+                    .headers
+                    .get(axum::http::header::COOKIE)
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(extract_session_cookie)
+            })
             .ok_or(AppError::Auth)?;
 
         let token_data = decode::<Claims>(
-            token,
+            &token,
             &DecodingKey::from_secret(state.config.jwt_secret.as_bytes()),
             &Validation::default(),
         )
@@ -59,4 +62,32 @@ pub fn create_token(user_id: Uuid, secret: &str) -> Result<String, AppError> {
         &EncodingKey::from_secret(secret.as_bytes()),
     )
     .map_err(|e| AppError::Internal(format!("Failed to create token: {e}")))
+}
+
+pub fn build_session_cookie(token: &str, secure: bool) -> String {
+    let mut cookie = format!(
+        "{SESSION_COOKIE_NAME}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={}",
+        86400 * 7
+    );
+    if secure {
+        cookie.push_str("; Secure");
+    }
+    cookie
+}
+
+pub fn clear_session_cookie(secure: bool) -> String {
+    let mut cookie = format!(
+        "{SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT"
+    );
+    if secure {
+        cookie.push_str("; Secure");
+    }
+    cookie
+}
+
+fn extract_session_cookie(header: &str) -> Option<String> {
+    header.split(';').find_map(|segment| {
+        let (name, value) = segment.trim().split_once('=')?;
+        (name == SESSION_COOKIE_NAME).then(|| value.to_string())
+    })
 }

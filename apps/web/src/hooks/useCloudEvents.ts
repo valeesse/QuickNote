@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { getToken } from "@/api/client";
+import { getBaseUrl } from "@/api/client";
 
 export function useCloudEvents(onChange: () => void): void {
   const callbackRef = useRef(onChange);
@@ -11,10 +11,8 @@ export function useCloudEvents(onChange: () => void): void {
 
     const connect = async () => {
       try {
-        const token = getToken();
-        if (!token) return;
-        const response = await fetch("/api/events", {
-          headers: { Authorization: `Bearer ${token}` },
+        const response = await fetch(`${getBaseUrl()}/api/events`, {
+          credentials: "include",
           signal: controller.signal,
         });
         if (!response.ok || !response.body) throw new Error(`Event stream failed (${response.status})`);

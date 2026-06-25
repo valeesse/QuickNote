@@ -10,6 +10,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
+use uuid::Uuid;
 
 const MAX_ATTACHMENT_SIZE: usize = 20 * 1024 * 1024;
 
@@ -137,4 +138,31 @@ pub async fn download(
         bytes,
     )
         .into_response())
+}
+
+pub async fn delete_attachment_object(
+    state: &AppState,
+    user_id: Uuid,
+    id: &str,
+) -> Result<(), AppError> {
+    let filer_url = format!(
+        "{}/quicknote/{}/{}",
+        state.config.seaweedfs_filer.trim_end_matches('/'),
+        user_id,
+        id
+    );
+    let response =
+        state.http.delete(filer_url).send().await.map_err(|error| {
+            AppError::Internal(format!("Object storage delete failed: {error}"))
+        })?;
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(());
+    }
+    if !response.status().is_success() {
+        return Err(AppError::Internal(format!(
+            "Object storage delete failed with {}",
+            response.status()
+        )));
+    }
+    Ok(())
 }

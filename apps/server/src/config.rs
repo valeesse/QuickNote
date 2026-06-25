@@ -3,6 +3,7 @@ pub struct Config {
     pub jwt_secret: String,
     pub seaweedfs_filer: String,
     pub allowed_origin: String,
+    pub cookie_secure: bool,
 }
 
 impl Config {
@@ -14,10 +15,14 @@ impl Config {
                 .unwrap_or_else(|_| "http://localhost:8888".to_string()),
             allowed_origin: std::env::var("ALLOWED_ORIGIN")
                 .map_err(|_| "ALLOWED_ORIGIN not set")?,
+            cookie_secure: false,
         };
         if config.jwt_secret.len() < 32 {
             return Err("JWT_SECRET must contain at least 32 bytes".to_string());
         }
-        Ok(config)
+        Ok(Self {
+            cookie_secure: config.allowed_origin.starts_with("https://"),
+            ..config
+        })
     }
 }

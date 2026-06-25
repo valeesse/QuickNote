@@ -1,3 +1,4 @@
+mod auth_limits;
 mod config;
 mod db;
 mod error;
@@ -15,6 +16,7 @@ use config::Config;
 use db::DbPool;
 use std::sync::Arc;
 use tokio::sync::broadcast;
+use tokio::sync::Mutex;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
@@ -23,6 +25,7 @@ pub struct AppState {
     pub config: Config,
     pub event_tx: broadcast::Sender<models::SyncEvent>,
     pub http: reqwest::Client,
+    pub auth_limiter: Mutex<auth_limits::AuthRateLimiter>,
 }
 
 #[tokio::main]
@@ -47,6 +50,7 @@ async fn main() {
         config,
         event_tx,
         http: reqwest::Client::new(),
+        auth_limiter: Mutex::new(auth_limits::AuthRateLimiter::default()),
     });
 
     let cors = CorsLayer::new()
@@ -67,7 +71,8 @@ async fn main() {
         .allow_headers([
             axum::http::header::AUTHORIZATION,
             axum::http::header::CONTENT_TYPE,
-        ]);
+        ])
+        .allow_credentials(true);
 
     let app = Router::new()
         .route("/api/health", get(|| async { "ok" }))
@@ -75,6 +80,8 @@ async fn main() {
         .route("/api/auth/register", post(routes::auth::register))
         .route("/api/auth/login", post(routes::auth::login))
         .route("/api/auth/refresh", post(routes::auth::refresh))
+        .route("/api/auth/me", get(routes::auth::me))
+        .route("/api/auth/logout", post(routes::auth::logout))
         // Notes (protected)
         .route(
             "/api/notes",
@@ -117,7 +124,10 @@ async fn main() {
             "/api/clipboard/{id}",
             delete(routes::clipboard::delete_item),
         )
-        .route("/api/clipboard/{id}/pin", patch(routes::clipboard::toggle_pin))
+        .route(
+            "/api/clipboard/{id}/pin",
+            patch(routes::clipboard::toggle_pin),
+        )
         // Sync (protected)
         .route("/api/sync/pull", post(routes::sync::pull))
         .route("/api/sync/push", post(routes::sync::push))

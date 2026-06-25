@@ -22,6 +22,14 @@ const NoteEditor = React.lazy(() =>
 export default function App() {
   const auth = useAuth();
 
+  if (auth.initializing) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-gray-50 text-sm text-gray-500">
+        正在恢复登录状态...
+      </div>
+    );
+  }
+
   if (!auth.user) {
     return (
       <LoginPage

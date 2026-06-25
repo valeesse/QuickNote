@@ -1,14 +1,21 @@
 use crate::error::AppError;
 use crate::middleware::AuthUser;
-use crate::models::{CreateNoteRequest, Note, NoteSummary, NoteVersion, ReorderNotesRequest, UpdateNoteRequest};
+use crate::models::{
+    CreateNoteRequest, Note, NoteSummary, NoteVersion, ReorderNotesRequest, UpdateNoteRequest,
+};
+use crate::routes::attachments::delete_attachment_object;
 use crate::routes::sync::{append_change, ChangePayload};
 use crate::AppState;
 use axum::extract::{Path, Query, State};
 use axum::Json;
+use regex::Regex;
+use std::collections::BTreeSet;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use uuid::Uuid;
 
-const NOTE_COLUMNS: &str = "id,title,content,is_pinned,sort_order,created_at,updated_at,version,is_deleted";
+const NOTE_COLUMNS: &str =
+    "id,title,content,is_pinned,sort_order,created_at,updated_at,version,is_deleted";
 
 pub async fn create_note(
     State(state): State<Arc<AppState>>,
@@ -119,11 +126,13 @@ pub async fn update_note(
     let mut tx = state.db.inner().begin().await?;
 
     // Snapshot current version before updating (keep max 10 unpinned versions)
-    let existing: Option<Note> = sqlx::query_as(&format!("SELECT {NOTE_COLUMNS} FROM notes WHERE id=$1 AND user_id=$2 AND is_deleted=false"))
-        .bind(&id)
-        .bind(user_id)
-        .fetch_optional(&mut *tx)
-        .await?;
+    let existing: Option<Note> = sqlx::query_as(&format!(
+        "SELECT {NOTE_COLUMNS} FROM notes WHERE id=$1 AND user_id=$2 AND is_deleted=false"
+    ))
+    .bind(&id)
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await?;
     if let Some(old) = existing {
         sqlx::query("INSERT INTO note_versions (note_id,user_id,title,content,version,created_at,is_pinned) VALUES ($1,$2,$3,$4,$5,$6,false)")
             .bind(&id)
@@ -308,28 +317,49 @@ pub async fn purge_note(
     Path(id): Path<String>,
 ) -> Result<Json<bool>, AppError> {
     let mut tx = state.db.inner().begin().await?;
-    // Check note exists and is deleted
-    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM notes WHERE id=$1 AND user_id=$2 AND is_deleted=true)")
-        .bind(&id)
-        .bind(user_id)
-        .fetch_one(&mut *tx)
-        .await?;
-    if !exists {
+    let note_content: Option<String> = sqlx::query_scalar(
+        "SELECT content FROM notes WHERE id=$1 AND user_id=$2 AND is_deleted=true",
+    )
+    .bind(&id)
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(note_content) = note_content else {
         tx.rollback().await?;
         return Ok(Json(false));
+    };
+    let version_contents: Vec<String> =
+        sqlx::query_scalar("SELECT content FROM note_versions WHERE note_id=$1 AND user_id=$2")
+            .bind(&id)
+            .bind(user_id)
+            .fetch_all(&mut *tx)
+            .await?;
+    let candidate_attachment_ids = collect_attachment_candidates(
+        std::iter::once(note_content.as_str()).chain(version_contents.iter().map(String::as_str)),
+    );
+    let mut orphaned_attachments = Vec::new();
+    for attachment_id in candidate_attachment_ids {
+        if !attachment_is_still_referenced(&mut tx, user_id, &attachment_id, &id).await? {
+            orphaned_attachments.push(attachment_id);
+        }
     }
-    // Cascade delete versions and attachments
+
+    for attachment_id in &orphaned_attachments {
+        delete_attachment_object(&state, user_id, attachment_id).await?;
+    }
+
     sqlx::query("DELETE FROM note_versions WHERE note_id=$1 AND user_id=$2")
         .bind(&id)
         .bind(user_id)
         .execute(&mut *tx)
         .await?;
-    sqlx::query("DELETE FROM attachments WHERE id IN (SELECT regexp_matches(content, 'attachment://([a-f0-9-]+)', 'g')) OR id=$1")
-        .bind(&id)
-        .execute(&mut *tx)
-        .await
-        .ok(); // Ignore errors on attachment cleanup
-    // Delete the note itself (cascade from FK will handle sync changes etc.)
+    for attachment_id in &orphaned_attachments {
+        sqlx::query("DELETE FROM attachments WHERE user_id=$1 AND id=$2")
+            .bind(user_id)
+            .bind(attachment_id)
+            .execute(&mut *tx)
+            .await?;
+    }
     sqlx::query("DELETE FROM notes WHERE id=$1 AND user_id=$2")
         .bind(&id)
         .bind(user_id)
@@ -386,7 +416,15 @@ pub async fn restore_version(
         .await?
         .ok_or(AppError::NotFound)?;
 
-    append_change(&mut tx, user_id, "note", &note_id, "upsert", ChangePayload::Note(note.clone())).await?;
+    append_change(
+        &mut tx,
+        user_id,
+        "note",
+        &note_id,
+        "upsert",
+        ChangePayload::Note(note.clone()),
+    )
+    .await?;
     tx.commit().await?;
     notify(&state, user_id, &note_id, "upsert");
     Ok(Json(note))
@@ -397,13 +435,12 @@ pub async fn toggle_version_pin(
     AuthUser(user_id): AuthUser,
     Path(version_id): Path<i64>,
 ) -> Result<Json<bool>, AppError> {
-    let result = sqlx::query(
-        "UPDATE note_versions SET is_pinned=NOT is_pinned WHERE id=$1 AND user_id=$2",
-    )
-    .bind(version_id)
-    .bind(user_id)
-    .execute(state.db.inner())
-    .await?;
+    let result =
+        sqlx::query("UPDATE note_versions SET is_pinned=NOT is_pinned WHERE id=$1 AND user_id=$2")
+            .bind(version_id)
+            .bind(user_id)
+            .execute(state.db.inner())
+            .await?;
     Ok(Json(result.rows_affected() > 0))
 }
 
@@ -412,13 +449,11 @@ pub async fn delete_version(
     AuthUser(user_id): AuthUser,
     Path(version_id): Path<i64>,
 ) -> Result<Json<bool>, AppError> {
-    let result = sqlx::query(
-        "DELETE FROM note_versions WHERE id=$1 AND user_id=$2",
-    )
-    .bind(version_id)
-    .bind(user_id)
-    .execute(state.db.inner())
-    .await?;
+    let result = sqlx::query("DELETE FROM note_versions WHERE id=$1 AND user_id=$2")
+        .bind(version_id)
+        .bind(user_id)
+        .execute(state.db.inner())
+        .await?;
     Ok(Json(result.rows_affected() > 0))
 }
 
@@ -491,9 +526,75 @@ fn notify(state: &AppState, user_id: Uuid, id: &str, operation: &str) {
     });
 }
 
+fn attachment_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX
+        .get_or_init(|| Regex::new(r"attachment://([a-f0-9]{64})").expect("valid attachment regex"))
+}
+
+fn collect_attachment_candidates<'a>(contents: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    let mut ids = BTreeSet::new();
+    for content in contents {
+        for captures in attachment_regex().captures_iter(content) {
+            if let Some(id) = captures.get(1) {
+                ids.insert(id.as_str().to_string());
+            }
+        }
+    }
+    ids.into_iter().collect()
+}
+
+async fn attachment_is_still_referenced(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user_id: Uuid,
+    attachment_id: &str,
+    purged_note_id: &str,
+) -> Result<bool, AppError> {
+    let pattern = format!("%attachment://{attachment_id}%");
+    let referenced_in_notes: bool = sqlx::query_scalar(
+        "SELECT EXISTS(
+            SELECT 1 FROM notes
+            WHERE user_id=$1 AND id<>$2 AND content LIKE $3
+        )",
+    )
+    .bind(user_id)
+    .bind(purged_note_id)
+    .bind(&pattern)
+    .fetch_one(&mut **tx)
+    .await?;
+    if referenced_in_notes {
+        return Ok(true);
+    }
+    let referenced_in_versions: bool = sqlx::query_scalar(
+        "SELECT EXISTS(
+            SELECT 1 FROM note_versions
+            WHERE user_id=$1 AND note_id<>$2 AND content LIKE $3
+        )",
+    )
+    .bind(user_id)
+    .bind(purged_note_id)
+    .bind(&pattern)
+    .fetch_one(&mut **tx)
+    .await?;
+    if referenced_in_versions {
+        return Ok(true);
+    }
+    let referenced_in_clipboard: bool = sqlx::query_scalar(
+        "SELECT EXISTS(
+            SELECT 1 FROM clipboard_items
+            WHERE user_id=$1 AND is_deleted=false AND content LIKE $2
+        )",
+    )
+    .bind(user_id)
+    .bind(&pattern)
+    .fetch_one(&mut **tx)
+    .await?;
+    Ok(referenced_in_clipboard)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::extract_title;
+    use super::{collect_attachment_candidates, extract_title};
 
     #[test]
     fn title_is_plain_text_and_bounded() {
@@ -507,5 +608,21 @@ mod tests {
         );
         assert_eq!(extract_title("<p></p>"), "Untitled");
         assert_eq!(extract_title(&"x".repeat(120)).chars().count(), 100);
+    }
+
+    #[test]
+    fn extracts_unique_attachment_ids() {
+        let ids = collect_attachment_candidates([
+            r#"<p><img src="attachment://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"></p>"#,
+            r#"<p><img src="attachment://bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"></p>"#,
+            r#"<p><img src="attachment://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"></p>"#,
+        ]);
+        assert_eq!(
+            ids,
+            vec![
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+            ]
+        );
     }
 }
