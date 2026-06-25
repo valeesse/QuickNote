@@ -1182,13 +1182,13 @@ impl Database {
         let tx = conn.transaction()?;
 
         let ids = {
-            let mut stmt = tx.prepare("SELECT id FROM clipboard_items WHERE is_deleted = 0")?;
+            let mut stmt = tx.prepare("SELECT id FROM clipboard_items WHERE is_deleted = 0 AND is_pinned = 0")?;
             let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
             rows.collect::<Result<Vec<_>>>()?
         };
 
         let changed = tx.execute(
-            "UPDATE clipboard_items SET is_deleted = 1, updated_at = ?1 WHERE is_deleted = 0",
+            "UPDATE clipboard_items SET is_deleted = 1, updated_at = ?1 WHERE is_deleted = 0 AND is_pinned = 0",
             params![now],
         )?;
 

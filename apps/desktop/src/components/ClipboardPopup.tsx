@@ -4,7 +4,7 @@ import { isTauri, invoke } from "@/utils/tauri";
 import { hideCurrentWindow } from "@/utils/window";
 import { ClipboardCard } from "@ui/components/ClipboardPanel";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { Clipboard, Trash2, X } from "lucide-react";
+import { Clipboard, Trash2, X, AlertTriangle } from "lucide-react";
 
 export function ClipboardPopup() {
   const {
@@ -22,6 +22,7 @@ export function ClipboardPopup() {
   } = useClipboard();
   const [capturing, setCapturing] = useState(false);
   const [clearing, setClearing] = useState(false);
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [captureMessage, setCaptureMessage] = useState<string | null>(null);
 
   // Hide window on blur
@@ -90,20 +91,17 @@ export function ClipboardPopup() {
   }, [capture, capturing, loadItems]);
 
   const handleClear = useCallback(async () => {
-    if (clearing) return;
-    const confirmed = window.confirm("清空本应用剪贴板历史？");
-    if (!confirmed) return;
-
+    setShowClearConfirm(false);
     setClearing(true);
     setCaptureMessage(null);
     try {
-      await clearClipboard();
-      setCaptureMessage("已清空");
+      const count = await clearClipboard();
+      setCaptureMessage(count > 0 ? `已清空 ${count} 条记录` : "已清空");
       window.setTimeout(() => setCaptureMessage(null), 1_500);
     } finally {
       setClearing(false);
     }
-  }, [clearClipboard, clearing]);
+  }, [clearClipboard]);
 
   const handleCopy = useCallback(async (id: string) => {
     await copyItem(id);
@@ -114,7 +112,7 @@ export function ClipboardPopup() {
   }, [copyItem]);
 
   return (
-    <div className="animate-popup-in flex h-screen flex-col bg-[#f7f7f9]">
+    <div className="animate-popup-in relative flex h-screen flex-col bg-[#f7f7f9]">
       {/* Header */}
       <div className="flex items-center gap-2 border-b border-gray-200 bg-white px-4 py-3">
         <Clipboard className="h-4 w-4 text-violet-600" />
@@ -135,7 +133,7 @@ export function ClipboardPopup() {
         </button>
         <button
           type="button"
-          onClick={() => void handleClear()}
+          onClick={() => setShowClearConfirm(true)}
           disabled={clearing}
           className="rounded-lg p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-500 disabled:cursor-not-allowed disabled:opacity-60"
           title="清空剪贴板"
@@ -189,6 +187,39 @@ export function ClipboardPopup() {
           </div>
         )}
       </div>
+
+      {/* Clear confirmation overlay */}
+      {showClearConfirm && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm">
+          <div className="mx-6 w-full max-w-xs animate-popup-in rounded-2xl bg-white p-5 shadow-2xl">
+            <div className="mb-4 flex items-center gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-red-50 text-red-500">
+                <AlertTriangle className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-semibold text-gray-900">清空剪贴板历史</h3>
+                <p className="mt-0.5 text-xs text-gray-500">固定项将被保留，其余记录将被删除且无法恢复。</p>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setShowClearConfirm(false)}
+                className="flex-1 rounded-xl border border-gray-200 px-3 py-2 text-xs font-medium text-gray-600 transition hover:bg-gray-50"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleClear()}
+                className="flex-1 rounded-xl bg-red-500 px-3 py-2 text-xs font-medium text-white transition hover:bg-red-600"
+              >
+                确认清空
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

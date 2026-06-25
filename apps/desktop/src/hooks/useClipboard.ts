@@ -58,9 +58,10 @@ export function useClipboard() {
   }, [loadItems]);
 
   const clearClipboard = useCallback(async () => {
-    await invoke<number>("clear_clipboard");
+    const count = await invoke<number>("clear_clipboard");
     await invoke<boolean>("prime_clipboard_capture");
     await loadItems();
+    return count;
   }, [loadItems]);
 
   useEffect(() => {
