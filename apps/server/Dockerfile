@@ -1,4 +1,4 @@
-FROM rust:1.88-slim AS builder
+FROM rust:1.96-slim AS builder
 ARG HTTP_PROXY
 ARG HTTPS_PROXY
 ARG ALL_PROXY

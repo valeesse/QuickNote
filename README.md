@@ -91,7 +91,7 @@
 
 ### 从源码构建
 
-**环境要求：** Node.js 20+、Rust 1.88+
+**环境要求：** Node.js 20+、rust 1.96+
 
 **Windows：** Microsoft Edge WebView2、Visual Studio C++ Build Tools
 
