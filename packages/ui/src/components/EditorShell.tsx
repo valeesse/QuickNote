@@ -29,13 +29,6 @@ export function EditorShell({
 }) {
   return (
     <div className="relative flex h-full flex-col" aria-busy={isSyncing}>
-      {isSyncing && (
-        <div className="absolute inset-0 z-20 flex items-start justify-center bg-white/30 pt-16 cursor-wait">
-          <span className="rounded bg-gray-800 px-3 py-1.5 text-xs text-white shadow">
-            同步中，编辑暂时锁定
-          </span>
-        </div>
-      )}
       <Toolbar
         editor={editor}
         note={note}
@@ -66,8 +59,8 @@ export function EditorShell({
             minute: "2-digit",
           })}
         </span>
-        <span className={saveStatus === "error" ? "text-red-500" : ""}>
-          {formatSaveStatus(saveStatus, errorMessage)}
+        <span className={saveStatus === "error" ? "text-red-500" : isSyncing ? "text-blue-500" : ""}>
+          {isSyncing ? "正在同步" : formatSaveStatus(saveStatus, errorMessage)}
         </span>
         {onOpenHistory ? (
           <button

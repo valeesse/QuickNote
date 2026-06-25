@@ -22,7 +22,6 @@ export interface AttachmentEditorBridgeOptions<NoteLike extends { id: string; co
 
 export function useAttachmentEditorBridge<NoteLike extends { id: string; content: string }>({
   note,
-  isSyncing,
   onUpdate,
   serializeContent,
   hydrateContent,
@@ -52,10 +51,6 @@ export function useAttachmentEditorBridge<NoteLike extends { id: string; content
   useEffect(() => {
     markEditorChangedRef.current = findReplace.markEditorChanged;
   }, [findReplace.markEditorChanged]);
-
-  useEffect(() => {
-    editor?.setEditable(!isSyncing);
-  }, [editor, isSyncing]);
 
   const handleEditorUpdate = useCallback((activeEditor: any) => {
     if (isApplyingExternalContentRef.current) return;

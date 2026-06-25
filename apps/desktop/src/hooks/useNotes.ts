@@ -176,6 +176,9 @@ export function useNotes() {
     const activeId = activeNoteIdRef.current;
     if (!activeId) return;
 
+    const draft = draftsRef.current.get(activeId);
+    if (draft && draft.persistedRevision < draft.revision) return;
+
     const note = await invoke<Note | null>("get_note", { id: activeId });
     if (activeNoteIdRef.current !== activeId) return;
     setActiveNote(note);
