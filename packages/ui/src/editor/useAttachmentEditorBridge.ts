@@ -16,6 +16,7 @@ export interface AttachmentEditorBridgeOptions<NoteLike extends { id: string; co
   serializeContent: (html: string) => string;
   hydrateContent: (content: string) => Promise<string>;
   saveImage: (file: File, dataUrl: string) => Promise<InsertedEditorImage>;
+  managedContent?: boolean;
   shouldMigrateContent?: (note: NoteLike) => boolean;
   migrateContent?: (content: string) => Promise<string>;
 }
@@ -26,6 +27,7 @@ export function useAttachmentEditorBridge<NoteLike extends { id: string; content
   serializeContent,
   hydrateContent,
   saveImage,
+  managedContent = false,
   shouldMigrateContent,
   migrateContent,
 }: AttachmentEditorBridgeOptions<NoteLike>) {
@@ -108,7 +110,7 @@ export function useAttachmentEditorBridge<NoteLike extends { id: string; content
   }, [insertImageFile]);
 
   useEffect(() => {
-    if (!editor) return;
+    if (!editor || managedContent) return;
     const nextContent = note.content || "";
     let cancelled = false;
     isApplyingExternalContentRef.current = true;
@@ -128,10 +130,10 @@ export function useAttachmentEditorBridge<NoteLike extends { id: string; content
     return () => {
       cancelled = true;
     };
-  }, [editor, hydrateContent, note.content, note.id]);
+  }, [editor, hydrateContent, managedContent, note.content, note.id]);
 
   useEffect(() => {
-    if (!editor || !migrateContent || !shouldMigrateContent?.(note) || migratedNotesRef.current.has(note.id)) return;
+    if (managedContent || !editor || !migrateContent || !shouldMigrateContent?.(note) || migratedNotesRef.current.has(note.id)) return;
     migratedNotesRef.current.add(note.id);
 
     let cancelled = false;
@@ -149,7 +151,7 @@ export function useAttachmentEditorBridge<NoteLike extends { id: string; content
     return () => {
       cancelled = true;
     };
-  }, [editor, hydrateContent, migrateContent, note, onUpdate, shouldMigrateContent]);
+  }, [editor, hydrateContent, managedContent, migrateContent, note, onUpdate, shouldMigrateContent]);
 
   return {
     findReplace,

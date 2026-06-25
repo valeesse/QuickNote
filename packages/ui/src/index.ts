@@ -17,6 +17,8 @@ export type { FindReplaceControls, TextMatch } from "./hooks/useFindReplace";
 export { createAttachmentImageExtension } from "./editor/attachments";
 export { useAttachmentEditorBridge } from "./editor/useAttachmentEditorBridge";
 export type { AttachmentEditorBridgeOptions, InsertedEditorImage } from "./editor/useAttachmentEditorBridge";
+export { useYjsDoc } from "./editor/useYjsDoc";
+export type { YjsDocState } from "./editor/useYjsDoc";
 
 // Utility functions
 export { compressImageToDataUrl } from "./utils/image";

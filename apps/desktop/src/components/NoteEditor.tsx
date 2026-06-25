@@ -5,10 +5,11 @@ import TaskList from "@tiptap/extension-task-list";
 import TaskItem from "@tiptap/extension-task-item";
 import Highlight from "@tiptap/extension-highlight";
 import Typography from "@tiptap/extension-typography";
+import { Collaboration } from "@tiptap/extension-collaboration";
 import { Markdown } from "@tiptap/markdown";
 import StarterKit from "@tiptap/starter-kit";
 import { useEditor, EditorContent } from "@tiptap/react";
-import { EditorShell, InlineMarkdownMarkRules, createAttachmentImageExtension, useAttachmentEditorBridge } from "@ui/index";
+import { EditorShell, InlineMarkdownMarkRules, createAttachmentImageExtension, useAttachmentEditorBridge, useYjsDoc } from "@ui/index";
 import type { Attachment, Note, SaveStatus } from "@/types";
 
 const AttachmentImage = createAttachmentImageExtension(Image);
@@ -34,10 +35,16 @@ export function NoteEditor({
   errorMessage,
   isSyncing,
 }: NoteEditorProps) {
+  const yjsDoc = useYjsDoc({
+    noteId: note.id,
+    state: note.yjs_state,
+    stateVersion: note.yjs_state_version,
+  });
   const bridge = useAttachmentEditorBridge({
     note,
     isSyncing,
     onUpdate,
+    managedContent: yjsDoc.isCollaborative,
     serializeContent: canonicalizeAttachmentReferences,
     hydrateContent: useCallback(
       (content: string) => hydrateAttachmentReferences(content, onResolveAttachment),
@@ -63,6 +70,7 @@ export function NoteEditor({
       StarterKit.configure({
         heading: { levels: [1, 2, 3] },
         codeBlock: { HTMLAttributes: { class: "language-plaintext" } },
+        undoRedo: yjsDoc.isCollaborative ? false : undefined,
       }),
       AttachmentImage.configure({
         inline: false,
@@ -76,8 +84,11 @@ export function NoteEditor({
       Typography,
       InlineMarkdownMarkRules,
       Markdown.configure({ indentation: { style: "space", size: 2 } }),
+      ...(yjsDoc.isCollaborative
+        ? [Collaboration.configure({ document: yjsDoc.doc, field: "prosemirror" })]
+        : []),
     ],
-    content: note.content.includes("attachment://") ? "" : note.content || "",
+    content: yjsDoc.isCollaborative || note.content.includes("attachment://") ? "" : note.content || "",
     onUpdate: ({ editor }) => bridge.handleEditorUpdate(editor),
     editorProps: bridge.editorProps,
   });

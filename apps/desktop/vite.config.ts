@@ -14,6 +14,7 @@ export default defineConfig(async () => ({
       "react": path.resolve(__dirname, "node_modules/react"),
       "react-dom": path.resolve(__dirname, "node_modules/react-dom"),
       "lucide-react": path.resolve(__dirname, "node_modules/lucide-react"),
+      "yjs": path.resolve(__dirname, "node_modules/yjs"),
       "@tiptap/core": path.resolve(__dirname, "node_modules/@tiptap/core"),
       "@tiptap/pm": path.resolve(__dirname, "node_modules/@tiptap/pm"),
     },

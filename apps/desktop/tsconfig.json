@@ -28,6 +28,8 @@
       "react-dom": ["node_modules/@types/react-dom"],
       "react-dom/*": ["node_modules/@types/react-dom/*"],
       "lucide-react": ["node_modules/lucide-react"],
+      "yjs": ["node_modules/yjs"],
+      "yjs/*": ["node_modules/yjs/*"],
       "@tiptap/core": ["node_modules/@tiptap/core"],
       "@tiptap/core/*": ["node_modules/@tiptap/core/*"],
       "@tiptap/pm/*": ["node_modules/@tiptap/pm/*"]

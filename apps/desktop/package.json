@@ -15,6 +15,7 @@
     "@tauri-apps/plugin-global-shortcut": "^2.3.2",
     "@tiptap/core": "^3.27.0",
     "@tiptap/extension-code-block-lowlight": "^3.27.0",
+    "@tiptap/extension-collaboration": "^3.27.0",
     "@tiptap/extension-highlight": "^3.27.0",
     "@tiptap/extension-image": "^3.27.0",
     "@tiptap/extension-placeholder": "^3.27.0",
@@ -32,6 +33,7 @@
     "react-window": "^2.2.7",
     "uuid": "^14.0.0",
     "y-indexeddb": "^9.0.12",
+    "y-protocols": "^1.0.7",
     "yjs": "^13.6.24"
   },
   "devDependencies": {
