@@ -38,15 +38,18 @@ impl FromRequestParts<Arc<AppState>> for AuthUser {
             })
             .ok_or(AppError::Auth)?;
 
-        let token_data = decode::<Claims>(
-            &token,
-            &DecodingKey::from_secret(state.config.jwt_secret.as_bytes()),
-            &Validation::default(),
-        )
-        .map_err(|_| AppError::Auth)?;
-
-        Ok(AuthUser(token_data.claims.sub))
+        Ok(AuthUser(authenticate_token(&token, &state.config.jwt_secret)?))
     }
+}
+
+pub fn authenticate_token(token: &str, secret: &str) -> Result<Uuid, AppError> {
+    let token_data = decode::<Claims>(
+        token,
+        &DecodingKey::from_secret(secret.as_bytes()),
+        &Validation::default(),
+    )
+    .map_err(|_| AppError::Auth)?;
+    Ok(token_data.claims.sub)
 }
 
 pub fn create_token(user_id: Uuid, secret: &str) -> Result<String, AppError> {

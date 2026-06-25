@@ -1,4 +1,5 @@
 mod auth_limits;
+mod collab;
 mod config;
 mod db;
 mod error;
@@ -26,6 +27,7 @@ pub struct AppState {
     pub event_tx: broadcast::Sender<models::SyncEvent>,
     pub http: reqwest::Client,
     pub auth_limiter: Mutex<auth_limits::AuthRateLimiter>,
+    pub collab_hub: collab::CollabHub,
 }
 
 #[tokio::main]
@@ -51,6 +53,7 @@ async fn main() {
         event_tx,
         http: reqwest::Client::new(),
         auth_limiter: Mutex::new(auth_limits::AuthRateLimiter::default()),
+        collab_hub: collab::CollabHub::default(),
     });
 
     let cors = CorsLayer::new()
@@ -145,6 +148,10 @@ async fn main() {
         .route("/api/sync/pull", post(routes::sync::pull))
         .route("/api/sync/push", post(routes::sync::push))
         .route("/api/events", get(routes::sync::events_sse))
+        .route(
+            "/api/collab/notes/{id}/ws",
+            get(collab::websocket::note_socket),
+        )
         .route(
             "/api/attachments/{id}",
             get(routes::attachments::download).put(routes::attachments::upload),
