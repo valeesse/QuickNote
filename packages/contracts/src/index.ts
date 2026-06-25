@@ -2,6 +2,8 @@ export interface Note {
   id: string;
   title: string;
   content: string;
+  yjs_state?: number[] | null;
+  yjs_state_version: number;
   is_pinned: boolean;
   sort_order: number;
   created_at: string;

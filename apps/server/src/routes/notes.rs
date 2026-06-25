@@ -16,7 +16,7 @@ use std::sync::OnceLock;
 use uuid::Uuid;
 
 const NOTE_COLUMNS: &str =
-    "id,title,content,is_pinned,sort_order,created_at,updated_at,version,is_deleted";
+    "id,title,content,yjs_state,yjs_state_version,is_pinned,sort_order,created_at,updated_at,version,is_deleted";
 
 pub async fn create_note(
     State(state): State<Arc<AppState>>,

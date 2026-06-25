@@ -53,6 +53,8 @@ impl Database {
                 id TEXT PRIMARY KEY,
                 title TEXT NOT NULL DEFAULT '',
                 content TEXT NOT NULL DEFAULT '',
+                yjs_state BLOB,
+                yjs_state_version INTEGER NOT NULL DEFAULT 0,
                 plain_text TEXT NOT NULL DEFAULT '',
                 preview TEXT NOT NULL DEFAULT '',
                 is_pinned INTEGER NOT NULL DEFAULT 0,
@@ -68,6 +70,13 @@ impl Database {
         ensure_column(&conn, "notes", "plain_text", "TEXT NOT NULL DEFAULT ''")?;
         ensure_column(&conn, "notes", "preview", "TEXT NOT NULL DEFAULT ''")?;
         ensure_column(&conn, "notes", "sort_order", "INTEGER NOT NULL DEFAULT 0")?;
+        ensure_column(&conn, "notes", "yjs_state", "BLOB")?;
+        ensure_column(
+            &conn,
+            "notes",
+            "yjs_state_version",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
 
         let schema_version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
         if schema_version < 2 {
@@ -242,6 +251,8 @@ impl Database {
             id,
             title,
             content: content.to_string(),
+            yjs_state: None,
+            yjs_state_version: 0,
             is_pinned: false,
             sort_order,
             created_at: now.clone(),
@@ -254,7 +265,7 @@ impl Database {
     pub fn get_note(&self, id: &str) -> Result<Option<Note>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, title, content, is_pinned, sort_order, created_at, updated_at, version, is_deleted
+            "SELECT id, title, content, yjs_state, yjs_state_version, is_pinned, sort_order, created_at, updated_at, version, is_deleted
              FROM notes WHERE id = ?1 AND is_deleted = 0",
         )?;
 
@@ -264,12 +275,14 @@ impl Database {
                     id: row.get(0)?,
                     title: row.get(1)?,
                     content: row.get(2)?,
-                    is_pinned: row.get(3)?,
-                    sort_order: row.get(4)?,
-                    created_at: row.get(5)?,
-                    updated_at: row.get(6)?,
-                    version: row.get(7)?,
-                    is_deleted: row.get(8)?,
+                    yjs_state: row.get(3)?,
+                    yjs_state_version: row.get(4)?,
+                    is_pinned: row.get(5)?,
+                    sort_order: row.get(6)?,
+                    created_at: row.get(7)?,
+                    updated_at: row.get(8)?,
+                    version: row.get(9)?,
+                    is_deleted: row.get(10)?,
                 })
             })
             .optional()?;
@@ -1166,8 +1179,8 @@ impl Database {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
         let changed = tx.execute(
-            "UPDATE clipboard_items SET is_deleted = 1, updated_at = ?1 WHERE id = ?2",
-            params![now, id],
+            "DELETE FROM clipboard_items WHERE id = ?1",
+            params![id],
         )?;
         if changed > 0 {
             enqueue_change(&tx, "clipboard", id, "delete", &now)?;
@@ -1188,8 +1201,8 @@ impl Database {
         };
 
         let changed = tx.execute(
-            "UPDATE clipboard_items SET is_deleted = 1, updated_at = ?1 WHERE is_deleted = 0 AND is_pinned = 0",
-            params![now],
+            "DELETE FROM clipboard_items WHERE is_pinned = 0",
+            [],
         )?;
 
         if changed > 0 {
@@ -1263,7 +1276,7 @@ impl Database {
     pub fn get_notes_since(&self, since: &str) -> Result<Vec<Note>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, title, content, is_pinned, sort_order, created_at, updated_at, version, is_deleted
+            "SELECT id, title, content, yjs_state, yjs_state_version, is_pinned, sort_order, created_at, updated_at, version, is_deleted
              FROM notes WHERE updated_at > ?1",
         )?;
 
@@ -1273,12 +1286,14 @@ impl Database {
                     id: row.get(0)?,
                     title: row.get(1)?,
                     content: row.get(2)?,
-                    is_pinned: row.get(3)?,
-                    sort_order: row.get(4)?,
-                    created_at: row.get(5)?,
-                    updated_at: row.get(6)?,
-                    version: row.get(7)?,
-                    is_deleted: row.get(8)?,
+                    yjs_state: row.get(3)?,
+                    yjs_state_version: row.get(4)?,
+                    is_pinned: row.get(5)?,
+                    sort_order: row.get(6)?,
+                    created_at: row.get(7)?,
+                    updated_at: row.get(8)?,
+                    version: row.get(9)?,
+                    is_deleted: row.get(10)?,
                 })
             })?
             .collect::<Result<Vec<_>>>()?;
@@ -1289,7 +1304,7 @@ impl Database {
 
 fn get_note_locked(conn: &Connection, id: &str, include_deleted: bool) -> Result<Option<Note>> {
     conn.query_row(
-        "SELECT id, title, content, is_pinned, sort_order, created_at, updated_at, version, is_deleted
+        "SELECT id, title, content, yjs_state, yjs_state_version, is_pinned, sort_order, created_at, updated_at, version, is_deleted
          FROM notes WHERE id = ?1 AND (?2 = 1 OR is_deleted = 0)",
         params![id, include_deleted],
         |row| {
@@ -1297,12 +1312,14 @@ fn get_note_locked(conn: &Connection, id: &str, include_deleted: bool) -> Result
                 id: row.get(0)?,
                 title: row.get(1)?,
                 content: row.get(2)?,
-                is_pinned: row.get(3)?,
-                sort_order: row.get(4)?,
-                created_at: row.get(5)?,
-                updated_at: row.get(6)?,
-                version: row.get(7)?,
-                is_deleted: row.get(8)?,
+                yjs_state: row.get(3)?,
+                yjs_state_version: row.get(4)?,
+                is_pinned: row.get(5)?,
+                sort_order: row.get(6)?,
+                created_at: row.get(7)?,
+                updated_at: row.get(8)?,
+                version: row.get(9)?,
+                is_deleted: row.get(10)?,
             })
         },
     )
@@ -1816,6 +1833,8 @@ mod tests {
             id: local.id.clone(),
             title: "远端标题".to_string(),
             content: "<p>远端标题</p><p>远端正文</p>".to_string(),
+            yjs_state: None,
+            yjs_state_version: 0,
             is_pinned: false,
             sort_order: 0,
             created_at: local.created_at,
@@ -1856,6 +1875,8 @@ mod tests {
             id: "shared-note".to_string(),
             title: "Seed".to_string(),
             content: "<p>Seed</p>".to_string(),
+            yjs_state: None,
+            yjs_state_version: 0,
             is_pinned: false,
             sort_order: 0,
             created_at: "2026-01-01T00:00:00Z".to_string(),
@@ -1909,6 +1930,8 @@ mod tests {
             id: "delete-race".to_string(),
             title: "Seed".to_string(),
             content: "<p>Seed</p>".to_string(),
+            yjs_state: None,
+            yjs_state_version: 0,
             is_pinned: false,
             sort_order: 0,
             created_at: "2026-01-01T00:00:00Z".to_string(),
@@ -2016,7 +2039,7 @@ mod tests {
         db_b.apply_remote_clipboard(&item_a, &base_version, "device-b")
             .unwrap();
         db_a.toggle_clipboard_pin(&item_a.id).unwrap();
-        db_b.delete_clipboard_item(&item_a.id).unwrap();
+        db_b.toggle_clipboard_pin(&item_a.id).unwrap();
         let version_a = db_a
             .ensure_local_causal_version("clipboard", &item_a.id, "device-a")
             .unwrap();
@@ -2039,11 +2062,11 @@ mod tests {
             db_a.get_clipboard_item_for_sync(&item_a.id)
                 .unwrap()
                 .unwrap()
-                .is_deleted,
+                .is_pinned,
             db_b.get_clipboard_item_for_sync(&item_a.id)
                 .unwrap()
                 .unwrap()
-                .is_deleted
+                .is_pinned
         );
     }
 }

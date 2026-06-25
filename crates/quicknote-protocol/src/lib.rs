@@ -8,6 +8,10 @@ pub struct Note {
     pub id: String,
     pub title: String,
     pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub yjs_state: Option<Vec<u8>>,
+    #[serde(default)]
+    pub yjs_state_version: i64,
     pub is_pinned: bool,
     #[serde(default)]
     pub sort_order: i64,
@@ -146,6 +150,8 @@ pub struct SyncEnvelope {
     pub changed_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub causal_version: Option<CausalVersion>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub yjs_update: Option<Vec<u8>>,
     pub note: Option<Note>,
     pub attachment: Option<AttachmentRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

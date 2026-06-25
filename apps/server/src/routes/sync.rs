@@ -179,6 +179,7 @@ pub async fn append_change(
         operation: operation.to_string(),
         changed_at: chrono::Utc::now().to_rfc3339(),
         causal_version: Some(causal_version),
+        yjs_update: None,
         note,
         attachment,
         clipboard,
@@ -266,12 +267,14 @@ async fn apply_to_canonical(
                 .ok_or_else(|| AppError::BadRequest("Note upsert is missing its payload".into()))?;
             sqlx::query(
                 "INSERT INTO notes
-                    (user_id, id, title, content, is_pinned, sort_order, created_at, updated_at, version, is_deleted, created_by, updated_by)
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$1,$1)
+                    (user_id, id, title, content, yjs_state, yjs_state_version, is_pinned, sort_order, created_at, updated_at, version, is_deleted, created_by, updated_by)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$1,$1)
                   ON CONFLICT (user_id,id) DO UPDATE SET title=EXCLUDED.title, content=EXCLUDED.content,
+                 yjs_state=EXCLUDED.yjs_state, yjs_state_version=EXCLUDED.yjs_state_version,
                  is_pinned=EXCLUDED.is_pinned, sort_order=EXCLUDED.sort_order, updated_at=EXCLUDED.updated_at,
                  version=EXCLUDED.version, is_deleted=EXCLUDED.is_deleted, updated_by=EXCLUDED.updated_by",
-            ).bind(user_id).bind(&note.id).bind(&note.title).bind(&note.content).bind(note.is_pinned)
+            ).bind(user_id).bind(&note.id).bind(&note.title).bind(&note.content).bind(&note.yjs_state)
+                .bind(note.yjs_state_version).bind(note.is_pinned)
                 .bind(note.sort_order).bind(&note.created_at).bind(&note.updated_at).bind(note.version).bind(note.is_deleted)
                 .execute(&mut **tx).await?;
         }
@@ -426,6 +429,8 @@ mod tests {
                 id: "note-a".into(),
                 title: "A".into(),
                 content: "<p>A</p>".into(),
+                yjs_state: None,
+                yjs_state_version: 0,
                 is_pinned: false,
                 sort_order: 0,
                 created_at: "2026-01-01T00:00:00Z".into(),
@@ -433,6 +438,7 @@ mod tests {
                 version: 1,
                 is_deleted: false,
             }),
+            yjs_update: None,
             attachment: None,
             clipboard: None,
         }
