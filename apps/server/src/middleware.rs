@@ -88,7 +88,7 @@ pub fn clear_session_cookie(secure: bool) -> String {
     cookie
 }
 
-fn extract_session_cookie(header: &str) -> Option<String> {
+pub fn extract_session_cookie(header: &str) -> Option<String> {
     header.split(';').find_map(|segment| {
         let (name, value) = segment.trim().split_once('=')?;
         (name == SESSION_COOKIE_NAME).then(|| value.to_string())

@@ -1,8 +1,9 @@
 use crate::error::AppError;
-use crate::middleware::authenticate_token;
+use crate::middleware::{authenticate_token, extract_session_cookie};
 use crate::AppState;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
+use axum::http::HeaderMap;
 use axum::response::IntoResponse;
 use futures::{SinkExt, StreamExt};
 use serde::Deserialize;
@@ -21,9 +22,18 @@ pub async fn note_socket(
     State(state): State<Arc<AppState>>,
     Path(note_id): Path<String>,
     Query(query): Query<CollabQuery>,
+    headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Result<impl IntoResponse, AppError> {
-    let token = query.token.ok_or(AppError::Auth)?;
+    let token = query
+        .token
+        .or_else(|| {
+            headers
+                .get(axum::http::header::COOKIE)
+                .and_then(|value| value.to_str().ok())
+                .and_then(extract_session_cookie)
+        })
+        .ok_or(AppError::Auth)?;
     let user_id = authenticate_token(&token, &state.config.jwt_secret)?;
     let client_id = query.client_id.unwrap_or_else(|| "websocket".to_string());
 

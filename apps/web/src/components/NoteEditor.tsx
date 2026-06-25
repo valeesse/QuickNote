@@ -11,7 +11,7 @@ import StarterKit from "@tiptap/starter-kit";
 import { useEditor, EditorContent } from "@tiptap/react";
 import { EditorShell, InlineMarkdownMarkRules, createAttachmentImageExtension, useAttachmentEditorBridge, useYjsDoc } from "@ui/index";
 import type { Note, SaveStatus } from "@/types";
-import { attachmentsApi } from "@/api/client";
+import { attachmentsApi, getBaseUrl } from "@/api/client";
 
 const CloudImage = createAttachmentImageExtension(Image);
 
@@ -37,6 +37,7 @@ export function NoteEditor({
     noteId: note.id,
     state: note.yjs_state,
     stateVersion: note.yjs_state_version,
+    websocketUrl: getCollabWebSocketUrl(note.id, note.yjs_state),
   });
   const bridge = useAttachmentEditorBridge({
     note,
@@ -115,6 +116,14 @@ export function NoteEditor({
 }
 
 // ── Web-specific attachment helpers (HTTP API) ──
+
+function getCollabWebSocketUrl(noteId: string, state?: number[] | null): string | null {
+  if (!state?.length) return null;
+  const base = getBaseUrl();
+  const origin = base ? new URL(base, window.location.origin) : window.location;
+  const protocol = origin.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${origin.host}/api/collab/notes/${encodeURIComponent(noteId)}/ws`;
+}
 
 function decodeDataUrl(dataUrl: string): { bytes: Uint8Array; mimeType: string } {
   const [header, payload] = dataUrl.split(",", 2);
