@@ -14,7 +14,7 @@ pub async fn list_items(
     State(state): State<Arc<AppState>>,
     AuthUser(user_id): AuthUser,
 ) -> Result<Json<Vec<ClipboardItem>>, AppError> {
-    let query = format!("SELECT {COLUMNS} FROM clipboard_items WHERE user_id=$1 AND is_deleted=false ORDER BY is_pinned DESC,created_at DESC LIMIT 300");
+    let query = format!("SELECT {COLUMNS} FROM clipboard_items WHERE user_id=$1 AND is_deleted=false ORDER BY is_pinned DESC,last_copied_at DESC,created_at DESC LIMIT 300");
     Ok(Json(
         sqlx::query_as(&query)
             .bind(user_id)

@@ -1135,7 +1135,7 @@ impl Database {
                     last_copied_at, capture_count, is_pinned, is_deleted
              FROM clipboard_items
              WHERE is_deleted = 0 AND (?1 = '%%' OR content LIKE ?1)
-             ORDER BY is_pinned DESC, created_at DESC
+             ORDER BY is_pinned DESC, last_copied_at DESC, created_at DESC
              LIMIT ?2",
         )?;
         let items = stmt
@@ -2003,6 +2003,23 @@ mod tests {
             .unwrap()
             .iter()
             .any(|change| change.entity_type == "clipboard"));
+    }
+
+    #[test]
+    fn duplicate_clipboard_capture_moves_item_to_the_front_of_its_group() {
+        let (_dir, db) = database();
+        db.capture_clipboard_at("first", "device-a", "2026-01-01T00:00:00Z")
+            .unwrap();
+        db.capture_clipboard_at("second", "device-a", "2026-01-01T00:00:10Z")
+            .unwrap();
+        db.capture_clipboard_at("first", "device-a", "2026-01-01T00:00:20Z")
+            .unwrap();
+
+        let items = db.list_clipboard_items("", 10).unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].content, "first");
+        assert_eq!(items[0].capture_count, 2);
+        assert_eq!(items[1].content, "second");
     }
 
     #[test]
