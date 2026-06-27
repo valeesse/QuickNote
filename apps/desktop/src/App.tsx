@@ -1,4 +1,4 @@
-import React, { Suspense, useEffect, useState } from "react";
+import React, { Suspense, useCallback, useEffect, useState } from "react";
 import { Sidebar } from "@/components/Sidebar";
 import { useNotes } from "@/hooks/useNotes";
 import { useSync } from "@/hooks/useSync";
@@ -77,6 +77,10 @@ export default function App() {
     refreshAfterSync,
   } = useNotes();
   const clipboard = useClipboard();
+  const resolveClipboardAttachment = useCallback(async (id: string) => {
+    const attachment = await invoke<{ id: string; data_url: string }>("get_attachment_data_url", { id });
+    return attachment.data_url;
+  }, []);
   const [viewMode, setViewMode] = useState<AppView>("notes");
   const [showTrash, setShowTrash] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
@@ -265,7 +269,7 @@ export default function App() {
             onDelete={(id) => void clipboard.deleteItem(id)}
             focusedItemId={focusedClipboardItemId}
             onCreateNoteFromItem={(id) => void handleCreateNoteFromClipboard(id)}
-            resolveAttachmentSrc={resolveAttachment}
+            resolveAttachmentSrc={resolveClipboardAttachment}
           />
         ) : <>
           <div className="flex items-center gap-2 border-b border-gray-200 bg-white px-3 py-2 md:hidden">

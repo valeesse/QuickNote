@@ -1,9 +1,8 @@
 import { useEffect, useCallback, useState } from "react";
 import { useClipboard } from "@/hooks/useClipboard";
-import { isTauri, invoke } from "@/utils/tauri";
+import { invoke } from "@/utils/tauri";
 import { hideCurrentWindow } from "@/utils/window";
 import { ClipboardCard } from "@ui/components/ClipboardPanel";
-import { convertFileSrc } from "@tauri-apps/api/core";
 import { Clipboard, Trash2, X, AlertTriangle } from "lucide-react";
 
 export function ClipboardPopup() {
@@ -225,7 +224,6 @@ export function ClipboardPopup() {
 }
 
 async function resolveClipboardAttachment(id: string): Promise<string> {
-  if (!isTauri()) return "";
-  const attachment = await invoke<{ id: string; path: string }>("get_attachment", { id });
-  return convertFileSrc(attachment.path);
+  const attachment = await invoke<{ id: string; data_url: string }>("get_attachment_data_url", { id });
+  return attachment.data_url;
 }

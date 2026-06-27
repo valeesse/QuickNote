@@ -238,6 +238,7 @@ pub fn run() {
             commands::clear_note_versions,
             commands::save_attachment,
             commands::get_attachment,
+            commands::get_attachment_data_url,
             commands::cleanup_attachments,
             commands::get_sync_config,
             commands::set_sync_config,

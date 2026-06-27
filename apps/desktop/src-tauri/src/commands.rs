@@ -36,6 +36,12 @@ pub struct Attachment {
     pub path: String,
 }
 
+#[derive(Debug, Serialize)]
+pub struct AttachmentDataUrl {
+    pub id: String,
+    pub data_url: String,
+}
+
 #[tauri::command]
 pub fn create_note(db: State<'_, Arc<Database>>, content: String) -> Result<Note, String> {
     db.create_note(&content).map_err(|e| e.to_string())
@@ -214,6 +220,34 @@ pub fn get_attachment(
             .join(record.relative_path)
             .to_string_lossy()
             .to_string(),
+    })
+}
+
+#[tauri::command]
+pub fn get_attachment_data_url(
+    db: State<'_, Arc<Database>>,
+    paths: State<'_, Arc<AppPaths>>,
+    id: String,
+) -> Result<AttachmentDataUrl, String> {
+    let record = db
+        .get_attachment(&id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Attachment not found".to_string())?;
+    if !record.mime_type.starts_with("image/") {
+        return Err("Attachment is not an image".to_string());
+    }
+    let path = paths.attachments_dir.join(&record.relative_path);
+    let bytes = std::fs::read(&path).map_err(|e| format!("Failed to read attachment: {e}"))?;
+    if bytes.len() > 20 * 1024 * 1024 {
+        return Err("Attachment is larger than the 20 MB limit".to_string());
+    }
+    Ok(AttachmentDataUrl {
+        id,
+        data_url: format!(
+            "data:{};base64,{}",
+            record.mime_type,
+            general_purpose::STANDARD.encode(bytes)
+        ),
     })
 }
 
