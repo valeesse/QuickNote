@@ -2,7 +2,7 @@ use crate::error::AppError;
 use crate::middleware::AuthUser;
 use crate::models::{
     AttachmentRecord, CausalVersion, ClipboardItem, CloudChange, Note, PullRequest, PullResponse,
-    PushRequest, PushResponse, SyncEnvelope, SyncEvent,
+    PushRequest, PushResponse, SyncEnvelope, SyncEvent, Tag, NoteTag,
 };
 use crate::routes::billing::ensure_device_allowed;
 use crate::AppState;
@@ -150,6 +150,8 @@ pub enum ChangePayload {
     Note(Note),
     Attachment(AttachmentRecord),
     Clipboard(ClipboardItem),
+    Tag(Tag),
+    NoteTag(NoteTag),
 }
 
 pub async fn append_change(
@@ -164,11 +166,13 @@ pub async fn append_change(
         .fetch_one(&mut **tx)
         .await?;
     let causal_version = next_causal_version(tx, user_id, entity_type, entity_id, None).await?;
-    let (note, attachment, clipboard) = match payload {
-        ChangePayload::None => (None, None, None),
-        ChangePayload::Note(value) => (Some(value), None, None),
-        ChangePayload::Attachment(value) => (None, Some(value), None),
-        ChangePayload::Clipboard(value) => (None, None, Some(value)),
+    let (note, attachment, clipboard, tag, note_tag) = match payload {
+        ChangePayload::None => (None, None, None, None, None),
+        ChangePayload::Note(value) => (Some(value), None, None, None, None),
+        ChangePayload::Attachment(value) => (None, Some(value), None, None, None),
+        ChangePayload::Clipboard(value) => (None, None, Some(value), None, None),
+        ChangePayload::Tag(value) => (None, None, None, Some(value), None),
+        ChangePayload::NoteTag(value) => (None, None, None, None, Some(value)),
     };
     let envelope = SyncEnvelope {
         schema_version: 2,
@@ -183,6 +187,8 @@ pub async fn append_change(
         note,
         attachment,
         clipboard,
+        tag,
+        note_tag,
     };
     let envelope_json = serde_json::to_value(&envelope)
         .map_err(|error| AppError::Internal(format!("Serialize error: {error}")))?;
@@ -323,6 +329,63 @@ async fn apply_to_canonical(
                 ));
             }
         }
+        ("tag", "delete") => {
+            sqlx::query("UPDATE tags SET is_deleted=true, updated_at=$3, updated_by=$1 WHERE user_id=$1 AND id=$2")
+                .bind(user_id)
+                .bind(&envelope.entity_id)
+                .bind(&envelope.changed_at)
+                .execute(&mut **tx)
+                .await?;
+        }
+        ("tag", "upsert") => {
+            let tag = envelope
+                .tag
+                .as_ref()
+                .ok_or_else(|| AppError::BadRequest("Tag upsert is missing its payload".into()))?;
+            sqlx::query(
+                "INSERT INTO tags
+                    (user_id,id,name,normalized_name,color,created_at,updated_at,is_deleted,created_by,updated_by)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$1,$1)
+                 ON CONFLICT(user_id,id) DO UPDATE SET
+                    name=EXCLUDED.name, normalized_name=EXCLUDED.normalized_name,
+                    color=EXCLUDED.color, updated_at=EXCLUDED.updated_at,
+                    is_deleted=EXCLUDED.is_deleted, updated_by=EXCLUDED.updated_by",
+            )
+            .bind(user_id)
+            .bind(&tag.id)
+            .bind(&tag.name)
+            .bind(&tag.normalized_name)
+            .bind(&tag.color)
+            .bind(&tag.created_at)
+            .bind(&tag.updated_at)
+            .bind(tag.is_deleted)
+            .execute(&mut **tx)
+            .await?;
+        }
+        ("note_tag", "delete") => {
+            sqlx::query("DELETE FROM note_tags WHERE user_id=$1 AND id=$2")
+                .bind(user_id)
+                .bind(&envelope.entity_id)
+                .execute(&mut **tx)
+                .await?;
+        }
+        ("note_tag", "upsert") => {
+            let note_tag = envelope.note_tag.as_ref().ok_or_else(|| {
+                AppError::BadRequest("Note-tag upsert is missing its payload".into())
+            })?;
+            sqlx::query(
+                "INSERT INTO note_tags(id,user_id,note_id,tag_id,created_at,created_by,updated_by)
+                 VALUES ($1,$2,$3,$4,$5,$2,$2)
+                 ON CONFLICT(user_id,id) DO NOTHING",
+            )
+            .bind(&note_tag.id)
+            .bind(user_id)
+            .bind(&note_tag.note_id)
+            .bind(&note_tag.tag_id)
+            .bind(&note_tag.created_at)
+            .execute(&mut **tx)
+            .await?;
+        }
         _ => return Err(AppError::BadRequest("Unsupported sync operation".into())),
     }
     Ok(())
@@ -363,7 +426,7 @@ fn validate_envelope(envelope: &SyncEnvelope) -> Result<(), AppError> {
     }
     if !matches!(
         envelope.entity_type.as_str(),
-        "note" | "attachment" | "clipboard"
+        "note" | "attachment" | "clipboard" | "tag" | "note_tag"
     ) || !matches!(envelope.operation.as_str(), "upsert" | "delete")
     {
         return Err(AppError::BadRequest(
@@ -380,6 +443,13 @@ fn validate_envelope(envelope: &SyncEnvelope) -> Result<(), AppError> {
         }
         ("clipboard", _) => {
             envelope.clipboard.as_ref().map(|item| item.id.as_str())
+                == Some(envelope.entity_id.as_str())
+        }
+        ("tag", "upsert") => {
+            envelope.tag.as_ref().map(|item| item.id.as_str()) == Some(envelope.entity_id.as_str())
+        }
+        ("note_tag", "upsert") => {
+            envelope.note_tag.as_ref().map(|item| item.id.as_str())
                 == Some(envelope.entity_id.as_str())
         }
         _ => true,

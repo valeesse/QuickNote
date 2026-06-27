@@ -10,10 +10,11 @@ import {
   Search,
   Settings,
   StickyNote,
+  Tags,
   Trash2,
   X,
 } from "lucide-react";
-import type { AppView, ClipboardItem, NoteSummary } from "@contracts";
+import type { AppView, ClipboardItem, NoteSummary, TagSummary } from "@contracts";
 import { formatRelativeTime } from "../utils/format";
 import { stripHtml, stripMarkdown } from "../utils/html";
 
@@ -25,9 +26,12 @@ export interface SidebarProps {
   clipboardCount: number;
   clipboardItems: ClipboardItem[];
   notes: NoteSummary[];
+  tags: TagSummary[];
+  selectedTag: string | null;
   activeNoteId: string | null;
   searchQuery: string;
   onSearchChange: (query: string) => void;
+  onSelectTag: (tag: string | null) => void;
   onSelectNote: (id: string) => void;
   onCreateNote: () => void;
   onDeleteNote: (id: string) => void;
@@ -59,9 +63,12 @@ export function Sidebar({
   clipboardCount,
   clipboardItems,
   notes,
+  tags,
+  selectedTag,
   activeNoteId,
   searchQuery,
   onSearchChange,
+  onSelectTag,
   onSelectNote,
   onCreateNote,
   onDeleteNote,
@@ -290,24 +297,37 @@ export function Sidebar({
       {viewMode === "notes" ? (
         <div className="note-sidebar">
           {notes.length === 0 ? (
-            <div className="clipboard-sidebar__empty">
-              <div>
-                <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-100 text-blue-700">
-                  <FileText className="h-7 w-7" />
+            <>
+              {tags.length > 0 && (
+                <NoteTagSection tags={tags} selectedTag={selectedTag} onSelectTag={onSelectTag} />
+              )}
+              <div className="clipboard-sidebar__empty">
+                <div>
+                  <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-100 text-blue-700">
+                    <FileText className="h-7 w-7" />
+                  </div>
+                  <h3 className="mt-4 text-sm font-semibold text-gray-700">
+                    {searchQuery || selectedTag ? "没有找到匹配的便签" : "还没有便签"}
+                  </h3>
+                  {!searchQuery && !selectedTag && (
+                    <button type="button" onClick={() => onCreateNote()} className="mt-3 text-sm font-medium text-blue-600 hover:text-blue-700">
+                      创建第一个便签
+                    </button>
+                  )}
                 </div>
-                <h3 className="mt-4 text-sm font-semibold text-gray-700">
-                  {searchQuery ? "没有找到匹配的便签" : "还没有便签"}
-                </h3>
-                {!searchQuery && (
-                  <button type="button" onClick={() => onCreateNote()} className="mt-3 text-sm font-medium text-blue-600 hover:text-blue-700">
-                    创建第一个便签
-                  </button>
-                )}
               </div>
-            </div>
+            </>
           ) : (
             <>
               {(pinnedNotes.length > 0 || draggingId) && (
+                <>
+                {tags.length > 0 && (
+                  <NoteTagSection
+                    tags={tags}
+                    selectedTag={selectedTag}
+                    onSelectTag={onSelectTag}
+                  />
+                )}
                 <NoteSidebarSection title="固定" group="pinned">
                   {pinnedNotes.map((note) => (
                     <NoteSidebarItem
@@ -320,6 +340,7 @@ export function Sidebar({
                       onSelect={selectNote}
                       onDelete={onDeleteNote}
                       onTogglePin={onTogglePin}
+                      onSelectTag={onSelectTag}
                       onPointerDown={startLongPress}
                       onPointerUp={finishPointerDrag}
                       onPointerLeave={resetLongPress}
@@ -327,6 +348,10 @@ export function Sidebar({
                     />
                   ))}
                 </NoteSidebarSection>
+                </>
+              )}
+              {pinnedNotes.length === 0 && !draggingId && tags.length > 0 && (
+                <NoteTagSection tags={tags} selectedTag={selectedTag} onSelectTag={onSelectTag} />
               )}
               <NoteSidebarSection title="全部" group="all">
                 {unpinnedNotes.map((note) => (
@@ -340,6 +365,7 @@ export function Sidebar({
                     onSelect={selectNote}
                     onDelete={onDeleteNote}
                     onTogglePin={onTogglePin}
+                    onSelectTag={onSelectTag}
                     onPointerDown={startLongPress}
                     onPointerUp={finishPointerDrag}
                     onPointerLeave={resetLongPress}
@@ -452,6 +478,48 @@ export function Sidebar({
   );
 }
 
+function NoteTagSection({
+  tags,
+  selectedTag,
+  onSelectTag,
+}: {
+  tags: TagSummary[];
+  selectedTag: string | null;
+  onSelectTag: (tag: string | null) => void;
+}) {
+  return (
+    <section className="clipboard-sidebar__section">
+      <h3 className="clipboard-sidebar__title flex items-center gap-1">
+        <Tags className="h-3 w-3" />
+        标签
+      </h3>
+      <button
+        type="button"
+        onClick={() => onSelectTag(null)}
+        className={`clipboard-sidebar__item ${!selectedTag ? "note-sidebar__item--active" : ""}`}
+      >
+        <span className="clipboard-sidebar__item-title">
+          <span>全部</span>
+        </span>
+      </button>
+      {tags.slice(0, 12).map((tag) => (
+        <button
+          key={tag.id}
+          type="button"
+          onClick={() => onSelectTag(selectedTag === tag.normalized_name ? null : tag.normalized_name)}
+          className={`clipboard-sidebar__item ${selectedTag === tag.normalized_name ? "note-sidebar__item--active" : ""}`}
+          title={`#${tag.name}`}
+        >
+          <span className="clipboard-sidebar__item-title">
+            <span className="truncate">#{tag.name}</span>
+            <span className="text-[10px] font-normal text-gray-400">{tag.note_count}</span>
+          </span>
+        </button>
+      ))}
+    </section>
+  );
+}
+
 function NoteSidebarSection({
   title,
   group,
@@ -478,6 +546,7 @@ function NoteSidebarItem({
   onSelect,
   onDelete,
   onTogglePin,
+  onSelectTag,
   onPointerDown,
   onPointerUp,
   onPointerLeave,
@@ -491,6 +560,7 @@ function NoteSidebarItem({
   onSelect: (id: string) => void;
   onDelete: (id: string) => void;
   onTogglePin: (id: string) => void;
+  onSelectTag: (tag: string | null) => void;
   onPointerDown: (id: string, pointerId: number) => void;
   onPointerUp: (targetId: string | null) => void;
   onPointerLeave: () => void;
@@ -569,6 +639,31 @@ function NoteSidebarItem({
         </span>
       </span>
       <span className="note-sidebar__item-text">{stripMarkdown(note.preview) || "空便签"}</span>
+      {note.tags.length > 0 && (
+        <span className="mt-2 flex flex-wrap gap-1">
+          {note.tags.slice(0, 3).map((tag) => (
+            <span
+              key={tag}
+              role="button"
+              tabIndex={0}
+              className="rounded bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-700"
+              onClick={(event) => {
+                event.stopPropagation();
+                onSelectTag(tag.toLowerCase());
+              }}
+              onPointerDown={(event) => event.stopPropagation()}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter" && event.key !== " ") return;
+                event.preventDefault();
+                event.stopPropagation();
+                onSelectTag(tag.toLowerCase());
+              }}
+            >
+              #{tag}
+            </span>
+          ))}
+        </span>
+      )}
       <span className="mt-2 block truncate text-[10px] text-gray-400">{formatRelativeTime(note.updated_at)}</span>
     </button>
   );

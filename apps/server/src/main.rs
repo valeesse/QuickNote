@@ -106,6 +106,7 @@ async fn main() {
         .route("/api/notes/reorder", post(routes::notes::reorder_notes))
         .route("/api/notes/trash", get(routes::notes::list_deleted_notes))
         .route("/api/notes/search", get(routes::notes::search_notes))
+        .route("/api/tags", get(routes::notes::list_tags))
         .route(
             "/api/notes/{id}",
             get(routes::notes::get_note)
@@ -113,6 +114,7 @@ async fn main() {
                 .delete(routes::notes::delete_note),
         )
         .route("/api/notes/{id}/restore", post(routes::notes::restore_note))
+        .route("/api/notes/{id}/tags", axum::routing::put(routes::notes::update_note_tags))
         .route("/api/notes/{id}/pin", patch(routes::notes::toggle_pin))
         .route("/api/notes/{id}/purge", delete(routes::notes::purge_note))
         .route(

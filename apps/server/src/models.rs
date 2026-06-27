@@ -4,7 +4,8 @@ use uuid::Uuid;
 
 pub use quicknote_protocol::{
     AttachmentRecord, BillingPlan, BillingPrice, CausalVersion, ClipboardItem, EntitlementSummary,
-    Note, NoteSummary, NoteVersion, SubscriptionSummary, SyncEnvelope, UsageMetric,
+    Note, NoteSummary, NoteTag, NoteVersion, SubscriptionSummary, SyncEnvelope, Tag, TagSummary,
+    UsageMetric,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -68,6 +69,11 @@ pub struct CreateNoteRequest {
 #[derive(Debug, Deserialize)]
 pub struct UpdateNoteRequest {
     pub content: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateNoteTagsRequest {
+    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]

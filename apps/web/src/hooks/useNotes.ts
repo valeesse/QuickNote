@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { notesApi } from "@/api/client";
-import type { Note, NoteSummary, NoteVersion, SaveStatus } from "@/types";
+import type { Note, NoteSummary, NoteVersion, SaveStatus, TagSummary } from "@/types";
 
 const SAVE_DELAY_MS = 800;
 const DRAFT_KEY = "quicknote-web-drafts-v1";
@@ -10,6 +10,8 @@ export function useNotes() {
   const [activeNote, setActiveNote] = useState<Note | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [deletedNotes, setDeletedNotes] = useState<NoteSummary[]>([]);
+  const [tags, setTags] = useState<TagSummary[]>([]);
+  const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [versions, setVersions] = useState<NoteVersion[]>([]);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -26,13 +28,14 @@ export function useNotes() {
     try {
       setIsLoading(true);
       setErrorMessage(null);
-      setNotes(searchQuery.trim() ? await notesApi.search(searchQuery) : await notesApi.list());
+      setNotes(selectedTag ? await notesApi.list(selectedTag) : searchQuery.trim() ? await notesApi.search(searchQuery) : await notesApi.list());
+      setTags(await notesApi.tags());
     } catch (error) {
       setErrorMessage(messageOf(error));
     } finally {
       setIsLoading(false);
     }
-  }, [searchQuery]);
+  }, [searchQuery, selectedTag]);
 
   const flushSave = useCallback(async (id: string): Promise<boolean> => {
     const timer = timersRef.current.get(id);
@@ -153,6 +156,17 @@ export function useNotes() {
       await loadNotes();
       if (activeNoteIdRef.current === id) setActiveNote(await notesApi.get(id));
     } catch (error) { setErrorMessage(messageOf(error)); }
+  }, [flushSave, loadNotes]);
+
+  const updateNoteTags = useCallback(async (noteId: string, nextTags: string[]) => {
+    if (!(await flushSave(noteId))) return;
+    try {
+      const updated = await notesApi.setTags(noteId, nextTags);
+      setActiveNote((current) => current?.id === noteId ? updated : current);
+      await loadNotes();
+    } catch (error) {
+      setErrorMessage(messageOf(error));
+    }
   }, [flushSave, loadNotes]);
 
   const loadDeletedNotes = useCallback(async () => {
@@ -279,6 +293,9 @@ export function useNotes() {
 
   return {
     notes,
+    tags,
+    selectedTag,
+    setSelectedTag,
     activeNote,
     isLoading,
     deletedNotes,
@@ -292,6 +309,7 @@ export function useNotes() {
     updateNote,
     deleteNote,
     togglePin,
+    updateNoteTags,
     reorderNotes,
     loadNotes,
     loadDeletedNotes,

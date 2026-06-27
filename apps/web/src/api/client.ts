@@ -130,8 +130,17 @@ export const authApi = {
 
 // Notes API
 export const notesApi = {
-  list: () => apiFetch<import("@/types").NoteSummary[]>("/api/notes"),
+  list: (tag?: string | null) =>
+    apiFetch<import("@/types").NoteSummary[]>(
+      tag ? `/api/notes?tag=${encodeURIComponent(tag)}` : "/api/notes",
+    ),
   get: (id: string) => apiFetch<import("@/types").Note>(`/api/notes/${id}`),
+  tags: () => apiFetch<import("@/types").TagSummary[]>("/api/tags"),
+  setTags: (id: string, tags: string[]) =>
+    apiFetch<import("@/types").Note>(`/api/notes/${id}/tags`, {
+      method: "PUT",
+      body: JSON.stringify({ tags }),
+    }),
   create: (content: string) =>
     apiFetch<import("@/types").Note>("/api/notes", {
       method: "POST",

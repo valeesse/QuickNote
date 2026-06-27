@@ -10,7 +10,7 @@ import { Markdown } from "@tiptap/markdown";
 import StarterKit from "@tiptap/starter-kit";
 import { useEditor, EditorContent } from "@tiptap/react";
 import { EditorShell, InlineMarkdownMarkRules, createAttachmentImageExtension, useAttachmentEditorBridge, useYjsDoc } from "@ui/index";
-import type { Attachment, Note, SaveStatus } from "@/types";
+import type { Attachment, Note, SaveStatus, TagSummary } from "@/types";
 
 const AttachmentImage = createAttachmentImageExtension(Image);
 
@@ -20,6 +20,8 @@ interface NoteEditorProps {
   onSaveAttachment: (dataUrl: string, filename: string) => Promise<Attachment>;
   onResolveAttachment: (id: string) => Promise<string>;
   onOpenHistory: () => void;
+  onUpdateTags: (noteId: string, tags: string[]) => void;
+  tags: TagSummary[];
   saveStatus: SaveStatus;
   errorMessage: string | null;
   isSyncing: boolean;
@@ -31,6 +33,8 @@ export function NoteEditor({
   onSaveAttachment,
   onResolveAttachment,
   onOpenHistory,
+  onUpdateTags,
+  tags,
   saveStatus,
   errorMessage,
   isSyncing,
@@ -109,6 +113,8 @@ export function NoteEditor({
       onInsertImage={bridge.addImageFromFile}
       findReplace={bridge.findReplace}
       onOpenHistory={onOpenHistory}
+      onUpdateTags={(tags) => onUpdateTags(note.id, tags)}
+      tagSuggestions={tags}
     >
       <EditorContent editor={editor} />
     </EditorShell>

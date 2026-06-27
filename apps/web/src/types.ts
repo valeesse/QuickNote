@@ -16,5 +16,6 @@ export type {
   NoteVersion,
   SaveStatus,
   SubscriptionSummary,
+  TagSummary,
   UsageMetric,
 } from "@contracts";

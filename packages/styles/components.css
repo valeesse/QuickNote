@@ -422,6 +422,7 @@
 
 .clipboard-sidebar__section {
   display: grid;
+  flex: 0 0 auto;
   gap: 8px;
 }
 
@@ -513,12 +514,14 @@
 }
 
 .note-sidebar [data-note-group] {
+  flex: 0 0 auto;
   min-height: 34px;
 }
 
 .note-sidebar__item {
   position: relative;
   display: block;
+  flex: 0 0 auto;
   width: 100%;
   min-width: 0;
   max-width: 100%;
@@ -528,7 +531,7 @@
   background: #fff;
   color: #4b5563;
   cursor: pointer;
-  padding: 9px 10px 10px 14px;
+  padding: 12px 14px 14px 18px;
   text-align: left;
   transition:
     border-color 90ms ease,
@@ -549,7 +552,7 @@
   position: absolute;
   top: 12px;
   bottom: 12px;
-  left: 6px;
+  left: 10px;
   width: 2px;
   border-radius: 999px;
   background: #d1d5db;
@@ -636,18 +639,28 @@
 }
 
 .note-sidebar__item-title {
-  display: flex;
+  display: block;
   min-width: 0;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  padding-right: 42px;
   color: #374151;
   font-size: 0.75rem;
   font-weight: 650;
+  line-height: 1.35;
+}
+
+.note-sidebar__item-title > span:first-child {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .note-sidebar__item-actions {
-  display: inline-flex;
+  position: absolute;
+  top: 9px;
+  right: 10px;
+  display: flex;
   flex: 0 0 auto;
   align-items: center;
   gap: 2px;
@@ -675,11 +688,12 @@
 
 .note-sidebar__item-text {
   display: -webkit-box;
-  margin-top: 4px;
+  min-width: 0;
+  margin-top: 8px;
   overflow: hidden;
   color: #6b7280;
   font-size: 0.75rem;
-  line-height: 1.45;
+  line-height: 1.5;
   overflow-wrap: anywhere;
   word-break: break-word;
   -webkit-box-orient: vertical;

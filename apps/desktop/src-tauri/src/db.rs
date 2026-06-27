@@ -7,7 +7,8 @@ use std::sync::Mutex;
 use uuid::Uuid;
 
 pub use quicknote_protocol::{
-    AttachmentRecord, CausalRelation, CausalVersion, ClipboardItem, Note, NoteSummary,
+    AttachmentRecord, CausalRelation, CausalVersion, ClipboardItem, Note, NoteSummary, NoteTag,
+    Tag, TagSummary,
 };
 
 const VERSION_SNAPSHOT_INTERVAL_SECONDS: i64 = 5 * 60;
@@ -196,10 +197,32 @@ impl Database {
                 is_pinned INTEGER NOT NULL DEFAULT 0,
                 is_deleted INTEGER NOT NULL DEFAULT 0
             );
+            CREATE TABLE IF NOT EXISTS tags (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                normalized_name TEXT NOT NULL UNIQUE,
+                color TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                is_deleted INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS note_tags (
+                id TEXT PRIMARY KEY,
+                note_id TEXT NOT NULL,
+                tag_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(note_id, tag_id)
+            );
             CREATE INDEX IF NOT EXISTS idx_sync_changes_pending
                 ON sync_changes(synced, seq);
             CREATE INDEX IF NOT EXISTS idx_clipboard_recent
-                ON clipboard_items(is_deleted, is_pinned DESC, last_copied_at DESC);",
+                ON clipboard_items(is_deleted, is_pinned DESC, last_copied_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_tags_normalized
+                ON tags(normalized_name);
+            CREATE INDEX IF NOT EXISTS idx_note_tags_tag
+                ON note_tags(tag_id, note_id);
+            CREATE INDEX IF NOT EXISTS idx_note_tags_note
+                ON note_tags(note_id);",
         )?;
 
         conn.pragma_update(None, "user_version", 5)?;
@@ -259,6 +282,7 @@ impl Database {
             updated_at: now,
             version: 1,
             is_deleted: false,
+            tags: Vec::new(),
         })
     }
 
@@ -283,11 +307,15 @@ impl Database {
                     updated_at: row.get(8)?,
                     version: row.get(9)?,
                     is_deleted: row.get(10)?,
+                    tags: Vec::new(),
                 })
             })
             .optional()?;
 
-        Ok(note)
+        Ok(note.map(|mut note| {
+            note.tags = tags_for_note(&conn, &note.id).unwrap_or_default();
+            note
+        }))
     }
 
     pub fn list_notes(&self) -> Result<Vec<NoteSummary>> {
@@ -308,11 +336,144 @@ impl Database {
                     is_pinned: row.get(3)?,
                     created_at: row.get(4)?,
                     updated_at: row.get(5)?,
+                    tags: Vec::new(),
                 })
             })?
             .collect::<Result<Vec<_>>>()?;
 
-        Ok(notes)
+        attach_summary_tags(&conn, notes)
+    }
+
+    pub fn list_notes_by_tag(&self, normalized_name: &str) -> Result<Vec<NoteSummary>> {
+        let conn = self.conn.lock().unwrap();
+        let tag = normalize_tag_name(normalized_name);
+        if tag.is_empty() {
+            drop(conn);
+            return self.list_notes();
+        }
+        let mut stmt = conn.prepare(
+            "SELECT n.id, n.title, n.preview, n.is_pinned, n.created_at, n.updated_at
+             FROM notes n
+             JOIN note_tags nt ON nt.note_id = n.id
+             JOIN tags t ON t.id = nt.tag_id
+             WHERE n.is_deleted = 0 AND t.is_deleted = 0 AND t.normalized_name = ?1
+             ORDER BY n.is_pinned DESC, n.sort_order DESC, n.updated_at DESC",
+        )?;
+        let notes = stmt
+            .query_map(params![tag], |row| {
+                Ok(NoteSummary {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    preview: row.get(2)?,
+                    is_pinned: row.get(3)?,
+                    created_at: row.get(4)?,
+                    updated_at: row.get(5)?,
+                    tags: Vec::new(),
+                })
+            })?
+            .collect::<Result<Vec<_>>>()?;
+        attach_summary_tags(&conn, notes)
+    }
+
+    pub fn list_tags(&self) -> Result<Vec<TagSummary>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT t.id, t.name, t.normalized_name, t.color, COUNT(n.id) AS note_count
+             FROM tags t
+             LEFT JOIN note_tags nt ON nt.tag_id = t.id
+             LEFT JOIN notes n ON n.id = nt.note_id AND n.is_deleted = 0
+             WHERE t.is_deleted = 0
+             GROUP BY t.id, t.name, t.normalized_name, t.color
+             ORDER BY note_count DESC, lower(t.name) ASC",
+        )?;
+        let tags = stmt.query_map([], |row| {
+            Ok(TagSummary {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                normalized_name: row.get(2)?,
+                color: row.get(3)?,
+                note_count: row.get(4)?,
+            })
+        })?
+        .collect::<Result<Vec<_>>>()?;
+        Ok(tags)
+    }
+
+    pub fn set_note_tags(&self, note_id: &str, names: &[String]) -> Result<Option<Note>> {
+        let mut conn = self.conn.lock().unwrap();
+        let now = Utc::now().to_rfc3339();
+        let tx = conn.transaction()?;
+        let note_exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM notes WHERE id = ?1 AND is_deleted = 0)",
+            params![note_id],
+            |row| row.get(0),
+        )?;
+        if !note_exists {
+            tx.rollback()?;
+            return Ok(None);
+        }
+
+        let normalized_names = normalize_tag_names(names);
+        let mut next_tag_ids = Vec::new();
+        for name in normalized_names {
+            let normalized = normalize_tag_name(&name);
+            if normalized.is_empty() {
+                continue;
+            }
+            let existing: Option<String> = tx
+                .query_row(
+                    "SELECT id FROM tags WHERE normalized_name = ?1",
+                    params![normalized],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let tag_id = existing.unwrap_or_else(|| tag_id_from_normalized(&normalized));
+            tx.execute(
+                "INSERT INTO tags(id, name, normalized_name, color, created_at, updated_at, is_deleted)
+                 VALUES(?1, ?2, ?3, NULL, ?4, ?4, 0)
+                 ON CONFLICT(normalized_name) DO UPDATE SET
+                    name = excluded.name,
+                    updated_at = excluded.updated_at,
+                    is_deleted = 0",
+                params![tag_id, name, normalized, now],
+            )?;
+            let stored_id: String = tx.query_row(
+                "SELECT id FROM tags WHERE normalized_name = ?1",
+                params![normalized],
+                |row| row.get(0),
+            )?;
+            enqueue_change(&tx, "tag", &stored_id, "upsert", &now)?;
+            next_tag_ids.push(stored_id);
+        }
+
+        let current_ids = {
+            let mut stmt = tx.prepare("SELECT tag_id FROM note_tags WHERE note_id = ?1")?;
+            let rows = stmt
+                .query_map(params![note_id], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>>>()?;
+            rows
+        };
+        for tag_id in &current_ids {
+            if !next_tag_ids.iter().any(|id| id == tag_id) {
+                let relation_id = note_tag_id(note_id, tag_id);
+                tx.execute("DELETE FROM note_tags WHERE id = ?1", params![relation_id])?;
+                enqueue_change(&tx, "note_tag", &relation_id, "delete", &now)?;
+            }
+        }
+        for tag_id in &next_tag_ids {
+            let relation_id = note_tag_id(note_id, tag_id);
+            let inserted = tx.execute(
+                "INSERT OR IGNORE INTO note_tags(id, note_id, tag_id, created_at)
+                 VALUES(?1, ?2, ?3, ?4)",
+                params![relation_id, note_id, tag_id, now],
+            )?;
+            if inserted > 0 {
+                enqueue_change(&tx, "note_tag", &relation_id, "upsert", &now)?;
+            }
+        }
+        let note = get_note_locked(&tx, note_id, false)?;
+        tx.commit()?;
+        Ok(note)
     }
 
     pub fn update_note(&self, id: &str, content: &str) -> Result<Option<Note>> {
@@ -412,11 +573,12 @@ impl Database {
                     is_pinned: row.get(3)?,
                     created_at: row.get(4)?,
                     updated_at: row.get(5)?,
+                    tags: Vec::new(),
                 })
             })?
             .collect::<Result<Vec<_>>>()?;
 
-        Ok(notes)
+        attach_summary_tags(&conn, notes)
     }
 
     pub fn toggle_pin(&self, id: &str) -> Result<bool> {
@@ -496,11 +658,12 @@ impl Database {
                     is_pinned: row.get(3)?,
                     created_at: row.get(4)?,
                     updated_at: row.get(5)?,
+                    tags: Vec::new(),
                 })
             })?
             .collect::<Result<Vec<_>>>()?;
 
-        Ok(notes)
+        attach_summary_tags(&conn, notes)
     }
 
     pub fn get_note_versions(&self, id: &str) -> Result<Vec<NoteVersion>> {
@@ -1043,7 +1206,11 @@ impl Database {
         let mut referenced_content = String::new();
         {
             let mut stmt = conn
-                .prepare("SELECT content FROM notes UNION ALL SELECT content FROM note_versions")?;
+                .prepare(
+                    "SELECT content FROM notes
+                     UNION ALL SELECT content FROM note_versions
+                     UNION ALL SELECT content FROM clipboard_items",
+                )?;
             let contents = stmt
                 .query_map([], |row| row.get::<_, String>(0))?
                 .collect::<Result<Vec<_>>>()?;
@@ -1272,6 +1439,93 @@ impl Database {
         Ok(true)
     }
 
+    pub fn get_tag_for_sync(&self, id: &str) -> Result<Option<Tag>> {
+        let conn = self.conn.lock().unwrap();
+        get_tag_locked(&conn, id, true)
+    }
+
+    pub fn get_note_tag_for_sync(&self, id: &str) -> Result<Option<NoteTag>> {
+        let conn = self.conn.lock().unwrap();
+        get_note_tag_locked(&conn, id)
+    }
+
+    pub fn apply_remote_tag(
+        &self,
+        remote: &Tag,
+        remote_version: &CausalVersion,
+        local_device_id: &str,
+    ) -> Result<bool> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        if should_skip_remote_entity(&tx, "tag", &remote.id, remote_version, local_device_id)? {
+            tx.commit()?;
+            return Ok(false);
+        }
+        tx.execute(
+            "INSERT INTO tags(id, name, normalized_name, color, created_at, updated_at, is_deleted)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name,
+                normalized_name = excluded.normalized_name,
+                color = excluded.color,
+                updated_at = excluded.updated_at,
+                is_deleted = excluded.is_deleted",
+            params![
+                remote.id,
+                remote.name,
+                remote.normalized_name,
+                remote.color,
+                remote.created_at,
+                remote.updated_at,
+                remote.is_deleted,
+            ],
+        )?;
+        set_entity_version_locked(&tx, "tag", &remote.id, remote_version, false)?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    pub fn apply_remote_note_tag(
+        &self,
+        remote: &NoteTag,
+        remote_version: &CausalVersion,
+        local_device_id: &str,
+    ) -> Result<bool> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        if should_skip_remote_entity(&tx, "note_tag", &remote.id, remote_version, local_device_id)?
+        {
+            tx.commit()?;
+            return Ok(false);
+        }
+        tx.execute(
+            "INSERT OR IGNORE INTO note_tags(id, note_id, tag_id, created_at)
+             VALUES(?1, ?2, ?3, ?4)",
+            params![remote.id, remote.note_id, remote.tag_id, remote.created_at],
+        )?;
+        set_entity_version_locked(&tx, "note_tag", &remote.id, remote_version, false)?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    pub fn apply_remote_note_tag_delete(
+        &self,
+        id: &str,
+        remote_version: &CausalVersion,
+        local_device_id: &str,
+    ) -> Result<bool> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        if should_skip_remote_entity(&tx, "note_tag", id, remote_version, local_device_id)? {
+            tx.commit()?;
+            return Ok(false);
+        }
+        let changed = tx.execute("DELETE FROM note_tags WHERE id = ?1", params![id])?;
+        set_entity_version_locked(&tx, "note_tag", id, remote_version, false)?;
+        tx.commit()?;
+        Ok(changed > 0)
+    }
+
     #[allow(dead_code)]
     pub fn get_notes_since(&self, since: &str) -> Result<Vec<Note>> {
         let conn = self.conn.lock().unwrap();
@@ -1294,16 +1548,23 @@ impl Database {
                     updated_at: row.get(8)?,
                     version: row.get(9)?,
                     is_deleted: row.get(10)?,
+                    tags: Vec::new(),
                 })
             })?
             .collect::<Result<Vec<_>>>()?;
 
-        Ok(notes)
+        Ok(notes
+            .into_iter()
+            .map(|mut note| {
+                note.tags = tags_for_note(&conn, &note.id).unwrap_or_default();
+                note
+            })
+            .collect())
     }
 }
 
 fn get_note_locked(conn: &Connection, id: &str, include_deleted: bool) -> Result<Option<Note>> {
-    conn.query_row(
+    let note = conn.query_row(
         "SELECT id, title, content, yjs_state, yjs_state_version, is_pinned, sort_order, created_at, updated_at, version, is_deleted
          FROM notes WHERE id = ?1 AND (?2 = 1 OR is_deleted = 0)",
         params![id, include_deleted],
@@ -1320,10 +1581,146 @@ fn get_note_locked(conn: &Connection, id: &str, include_deleted: bool) -> Result
                 updated_at: row.get(8)?,
                 version: row.get(9)?,
                 is_deleted: row.get(10)?,
+                tags: Vec::new(),
+            })
+        },
+    )
+    .optional()?;
+    Ok(note.map(|mut note| {
+        note.tags = tags_for_note(conn, &note.id).unwrap_or_default();
+        note
+    }))
+}
+
+fn get_tag_locked(conn: &Connection, id: &str, include_deleted: bool) -> Result<Option<Tag>> {
+    conn.query_row(
+        "SELECT id, name, normalized_name, color, created_at, updated_at, is_deleted
+         FROM tags WHERE id = ?1 AND (?2 = 1 OR is_deleted = 0)",
+        params![id, include_deleted],
+        |row| {
+            Ok(Tag {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                normalized_name: row.get(2)?,
+                color: row.get(3)?,
+                created_at: row.get(4)?,
+                updated_at: row.get(5)?,
+                is_deleted: row.get(6)?,
             })
         },
     )
     .optional()
+}
+
+fn get_note_tag_locked(conn: &Connection, id: &str) -> Result<Option<NoteTag>> {
+    conn.query_row(
+        "SELECT id, note_id, tag_id, created_at FROM note_tags WHERE id = ?1",
+        params![id],
+        |row| {
+            Ok(NoteTag {
+                id: row.get(0)?,
+                note_id: row.get(1)?,
+                tag_id: row.get(2)?,
+                created_at: row.get(3)?,
+            })
+        },
+    )
+    .optional()
+}
+
+fn should_skip_remote_entity(
+    conn: &Connection,
+    entity_type: &str,
+    entity_id: &str,
+    remote_version: &CausalVersion,
+    local_device_id: &str,
+) -> Result<bool> {
+    let local_dirty: bool = conn.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM sync_changes
+            WHERE synced = 0 AND entity_type = ?1 AND entity_id = ?2
+        )",
+        params![entity_type, entity_id],
+        |row| row.get(0),
+    )?;
+    let mut local_version = get_entity_version_locked(conn, entity_type, entity_id)?;
+    if local_dirty {
+        local_version = Some(ensure_local_causal_version_locked(
+            conn,
+            entity_type,
+            entity_id,
+            local_device_id,
+        )?);
+    }
+    if let Some(local_version) = &local_version {
+        if matches!(
+            local_version.relation(remote_version),
+            CausalRelation::Equal | CausalRelation::Dominates
+        ) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn attach_summary_tags(
+    conn: &Connection,
+    notes: Vec<NoteSummary>,
+) -> Result<Vec<NoteSummary>> {
+    notes
+        .into_iter()
+        .map(|mut note| {
+            note.tags = tags_for_note(conn, &note.id)?;
+            Ok(note)
+        })
+        .collect()
+}
+
+fn tags_for_note(conn: &Connection, note_id: &str) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT t.name
+         FROM tags t
+         JOIN note_tags nt ON nt.tag_id = t.id
+         WHERE nt.note_id = ?1 AND t.is_deleted = 0
+         ORDER BY lower(t.name) ASC",
+    )?;
+    let tags = stmt
+        .query_map(params![note_id], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>>>()?;
+    Ok(tags)
+}
+
+fn normalize_tag_names(names: &[String]) -> Vec<String> {
+    let mut seen = std::collections::BTreeSet::new();
+    names
+        .iter()
+        .filter_map(|name| {
+            let display = name.trim().trim_start_matches('#').trim();
+            let normalized = normalize_tag_name(display);
+            if normalized.is_empty() || !seen.insert(normalized) {
+                None
+            } else {
+                Some(display.chars().take(40).collect::<String>())
+            }
+        })
+        .collect()
+}
+
+fn normalize_tag_name(name: &str) -> String {
+    name.trim()
+        .trim_start_matches('#')
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+fn note_tag_id(note_id: &str, tag_id: &str) -> String {
+    format!("{:x}", Sha256::digest(format!("{note_id}:{tag_id}")))
+}
+
+fn tag_id_from_normalized(normalized_name: &str) -> String {
+    format!("{:x}", Sha256::digest(format!("tag:{normalized_name}")))
 }
 
 fn attachment_from_row(row: &rusqlite::Row<'_>) -> Result<AttachmentRecord> {
@@ -1841,6 +2238,7 @@ mod tests {
             updated_at: "9999-12-31T23:59:59Z".to_string(),
             version: 2,
             is_deleted: false,
+            tags: Vec::new(),
         };
 
         let remote_version = CausalVersion::legacy("device-z", 1);
@@ -1883,6 +2281,7 @@ mod tests {
             updated_at: "2026-01-01T00:00:00Z".to_string(),
             version: 1,
             is_deleted: false,
+            tags: Vec::new(),
         };
         db_a.apply_remote_note(&seed, &seed_version, "device-a")
             .unwrap();
@@ -1938,6 +2337,7 @@ mod tests {
             updated_at: "2026-01-01T00:00:00Z".to_string(),
             version: 1,
             is_deleted: false,
+            tags: Vec::new(),
         };
         db_a.apply_remote_note(&seed, &seed_version, "device-a")
             .unwrap();
@@ -2020,6 +2420,21 @@ mod tests {
         assert_eq!(items[0].content, "first");
         assert_eq!(items[0].capture_count, 2);
         assert_eq!(items[1].content, "second");
+    }
+
+    #[test]
+    fn clipboard_image_attachments_are_not_orphaned() {
+        let (_dir, db) = database();
+        let id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        db.register_attachment(id, &format!("{id}.webp"), "image/webp", 12)
+            .unwrap();
+        db.capture_clipboard(
+            &format!(r#"<img src="attachment://{id}" alt="剪贴板图片">"#),
+            "device-a",
+        )
+        .unwrap();
+
+        assert!(db.orphan_attachments().unwrap().is_empty());
     }
 
     #[test]

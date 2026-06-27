@@ -573,6 +573,8 @@ fn build_state_envelope(
     let mut note = None;
     let mut attachment = None;
     let mut clipboard = None;
+    let mut tag = None;
+    let mut note_tag = None;
     let mut changed_at = chrono::Utc::now().to_rfc3339();
 
     match entity_type {
@@ -607,6 +609,27 @@ fn build_state_envelope(
                 clipboard = None;
             }
         }
+        "tag" => {
+            tag = db.get_tag_for_sync(entity_id).map_err(|e| e.to_string())?;
+            if let Some(ref value) = tag {
+                changed_at = value.updated_at.clone();
+            }
+            if tag.as_ref().is_some_and(|value| value.is_deleted) || tag.is_none() {
+                operation = "delete".to_string();
+                tag = None;
+            }
+        }
+        "note_tag" => {
+            note_tag = db
+                .get_note_tag_for_sync(entity_id)
+                .map_err(|e| e.to_string())?;
+            if let Some(ref value) = note_tag {
+                changed_at = value.created_at.clone();
+            }
+            if note_tag.is_none() {
+                operation = "delete".to_string();
+            }
+        }
         _ => {}
     }
 
@@ -623,6 +646,8 @@ fn build_state_envelope(
         note,
         attachment,
         clipboard,
+        tag,
+        note_tag,
     })
 }
 
@@ -639,6 +664,8 @@ fn build_envelope(
     let mut note = None;
     let mut attachment = None;
     let mut clipboard = None;
+    let mut tag = None;
+    let mut note_tag = None;
 
     match change.entity_type.as_str() {
         "note" => {
@@ -650,6 +677,14 @@ fn build_envelope(
         "clipboard" => {
             clipboard = db
                 .get_clipboard_item_for_sync(&change.entity_id)
+                .map_err(|e| e.to_string())?;
+        }
+        "tag" => {
+            tag = db.get_tag_for_sync(&change.entity_id).map_err(|e| e.to_string())?;
+        }
+        "note_tag" => {
+            note_tag = db
+                .get_note_tag_for_sync(&change.entity_id)
                 .map_err(|e| e.to_string())?;
         }
         _ => {}
@@ -668,6 +703,8 @@ fn build_envelope(
         note,
         attachment,
         clipboard,
+        tag,
+        note_tag,
     })
 }
 
@@ -734,7 +771,12 @@ async fn pull_state(
                     .get_entity_causal_version(entity_type, entity_id)
                     .map_err(|e| e.to_string())?;
 
-                let should_apply = match &local_version {
+                let attachment_missing = envelope.entity_type == "attachment"
+                    && envelope
+                        .attachment
+                        .as_ref()
+                        .is_some_and(|record| !local_attachment_available(db, attachments_dir, record));
+                let should_apply = attachment_missing || match &local_version {
                     None => true, // no local version → apply
                     Some(local) => {
                         match remote_version.relation(local) {
@@ -761,6 +803,17 @@ async fn pull_state(
         }
     }
     Ok((pulled, conflicts))
+}
+
+fn local_attachment_available(
+    db: &Database,
+    attachments_dir: &Path,
+    record: &AttachmentRecord,
+) -> bool {
+    db.get_attachment(&record.id)
+        .ok()
+        .flatten()
+        .is_some_and(|local| attachments_dir.join(local.relative_path).exists())
 }
 
 fn is_safe_path_segment(value: &str) -> bool {
@@ -834,6 +887,26 @@ async fn apply_envelope(
                 .map(|changed| (changed, false))
                 .map_err(|e| e.to_string())
         }
+        "tag" => {
+            let Some(tag) = &envelope.tag else {
+                return Ok((false, false));
+            };
+            db.apply_remote_tag(tag, &causal_version, local_device_id)
+                .map(|changed| (changed, false))
+                .map_err(|e| e.to_string())
+        }
+        "note_tag" if envelope.operation == "delete" => db
+            .apply_remote_note_tag_delete(&envelope.entity_id, &causal_version, local_device_id)
+            .map(|changed| (changed, false))
+            .map_err(|e| e.to_string()),
+        "note_tag" => {
+            let Some(note_tag) = &envelope.note_tag else {
+                return Ok((false, false));
+            };
+            db.apply_remote_note_tag(note_tag, &causal_version, local_device_id)
+                .map(|changed| (changed, false))
+                .map_err(|e| e.to_string())
+        }
         _ => Ok((false, false)),
     }
 }
@@ -856,7 +929,7 @@ fn validate_envelope(
     }
     if !matches!(
         envelope.entity_type.as_str(),
-        "note" | "attachment" | "clipboard"
+        "note" | "attachment" | "clipboard" | "tag" | "note_tag"
     ) {
         return Err(format!("unsupported entity type {}", envelope.entity_type));
     }
@@ -882,6 +955,19 @@ fn validate_envelope(
             != Some(envelope.entity_id.as_str())
     {
         return Err("clipboard payload does not match its entity ID".to_string());
+    }
+    if envelope.entity_type == "tag"
+        && envelope.operation == "upsert"
+        && envelope.tag.as_ref().map(|item| item.id.as_str()) != Some(envelope.entity_id.as_str())
+    {
+        return Err("tag payload does not match its entity ID".to_string());
+    }
+    if envelope.entity_type == "note_tag"
+        && envelope.operation == "upsert"
+        && envelope.note_tag.as_ref().map(|item| item.id.as_str())
+            != Some(envelope.entity_id.as_str())
+    {
+        return Err("note_tag payload does not match its entity ID".to_string());
     }
     Ok(())
 }
@@ -1029,9 +1115,12 @@ mod tests {
                 updated_at: "2026-01-01T00:00:00Z".to_string(),
                 version: 1,
                 is_deleted: false,
+                tags: Vec::new(),
             }),
             attachment: None,
             clipboard: None,
+            tag: None,
+            note_tag: None,
         };
         assert!(validate_envelope(&envelope, "device-a").is_ok());
         assert!(validate_envelope(&envelope, "device-b").is_err());
@@ -1134,6 +1223,8 @@ mod tests {
                 created_at: "2026-01-01T00:00:00Z".to_string(),
             }),
             clipboard: None,
+            tag: None,
+            note_tag: None,
         };
         provider.objects.lock().unwrap().insert(
             format!("state/device-b/attachment/{id}.json"),
@@ -1145,6 +1236,43 @@ mod tests {
         assert!(pull_state(&provider, &db, dir.path(), &sync_config)
             .await
             .is_err());
+    }
+
+    #[tokio::test]
+    async fn pull_recovers_missing_local_attachment_file() {
+        let dir_a = tempfile::tempdir().unwrap();
+        let dir_b = tempfile::tempdir().unwrap();
+        let db_a = Database::new(dir_a.path().to_path_buf()).unwrap();
+        let db_b = Database::new(dir_b.path().to_path_buf()).unwrap();
+        let provider = MemoryProvider::default();
+        let bytes = b"image bytes";
+        let id = format!("{:x}", Sha256::digest(bytes));
+        let filename = format!("{id}.webp");
+        std::fs::write(dir_a.path().join(&filename), bytes).unwrap();
+        db_a.register_attachment(&id, &filename, "image/webp", bytes.len() as i64)
+            .unwrap();
+
+        assert_eq!(
+            push_state(&provider, &db_a, dir_a.path(), &config("device-a"))
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            pull_state(&provider, &db_b, dir_b.path(), &config("device-b"))
+                .await
+                .unwrap(),
+            (1, 0)
+        );
+        std::fs::remove_file(dir_b.path().join(&filename)).unwrap();
+
+        assert_eq!(
+            pull_state(&provider, &db_b, dir_b.path(), &config("device-b"))
+                .await
+                .unwrap(),
+            (1, 0)
+        );
+        assert_eq!(std::fs::read(dir_b.path().join(&filename)).unwrap(), bytes);
     }
 
     #[test]

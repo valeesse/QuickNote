@@ -49,6 +49,9 @@ export default function App() {
 function MainApp({ userEmail, onLogout }: { userEmail: string; onLogout: () => void }) {
   const {
     notes,
+    tags,
+    selectedTag,
+    setSelectedTag,
     activeNote,
     deletedNotes,
     versions,
@@ -65,6 +68,7 @@ function MainApp({ userEmail, onLogout }: { userEmail: string; onLogout: () => v
     purgeNote,
     purgeAllNotes,
     togglePin,
+    updateNoteTags,
     reorderNotes,
     loadNotes,
     loadDeletedNotes,
@@ -242,9 +246,12 @@ function MainApp({ userEmail, onLogout }: { userEmail: string; onLogout: () => v
         clipboardCount={clipboard.items.length}
         clipboardItems={clipboard.items}
         notes={notes}
+        tags={tags}
+        selectedTag={selectedTag}
         activeNoteId={activeNote?.id ?? null}
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
+        onSelectTag={setSelectedTag}
         onSelectNote={selectNote}
         onCreateNote={createNote}
         onDeleteNote={(id) => void handleDeleteNote(id)}
@@ -349,6 +356,8 @@ function MainApp({ userEmail, onLogout }: { userEmail: string; onLogout: () => v
                   saveStatus={saveStatus}
                   errorMessage={errorMessage}
                   onOpenHistory={handleOpenHistory}
+                  onUpdateTags={updateNoteTags}
+                  tags={tags}
                 />
               ) : (
                 <EmptyState

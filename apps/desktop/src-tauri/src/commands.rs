@@ -1,4 +1,4 @@
-use crate::db::{ClipboardItem, Database, Note, NoteSummary, NoteVersion};
+use crate::db::{ClipboardItem, Database, Note, NoteSummary, NoteVersion, TagSummary};
 use crate::sync::{SyncConfig, SyncConfigInput, SyncReport, SyncService};
 use base64::{engine::general_purpose, Engine as _};
 use image::{codecs::png::PngEncoder, ColorType, ImageEncoder};
@@ -49,6 +49,28 @@ pub fn get_note(db: State<'_, Arc<Database>>, id: String) -> Result<Option<Note>
 #[tauri::command]
 pub fn list_notes(db: State<'_, Arc<Database>>) -> Result<Vec<NoteSummary>, String> {
     db.list_notes().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn list_notes_by_tag(
+    db: State<'_, Arc<Database>>,
+    tag: String,
+) -> Result<Vec<NoteSummary>, String> {
+    db.list_notes_by_tag(&tag).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn list_tags(db: State<'_, Arc<Database>>) -> Result<Vec<TagSummary>, String> {
+    db.list_tags().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn set_note_tags(
+    db: State<'_, Arc<Database>>,
+    note_id: String,
+    tags: Vec<String>,
+) -> Result<Option<Note>, String> {
+    db.set_note_tags(&note_id, &tags).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

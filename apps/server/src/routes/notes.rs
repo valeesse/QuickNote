@@ -1,7 +1,8 @@
 use crate::error::AppError;
 use crate::middleware::AuthUser;
 use crate::models::{
-    CreateNoteRequest, Note, NoteSummary, NoteVersion, ReorderNotesRequest, UpdateNoteRequest,
+    CreateNoteRequest, Note, NoteSummary, NoteVersion, ReorderNotesRequest, TagSummary,
+    UpdateNoteRequest, UpdateNoteTagsRequest,
 };
 use crate::routes::attachments::delete_attachment_object;
 use crate::routes::billing::version_history_cutoff;
@@ -10,13 +11,18 @@ use crate::AppState;
 use axum::extract::{Path, Query, State};
 use axum::Json;
 use regex::Regex;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use uuid::Uuid;
 
 const NOTE_COLUMNS: &str =
-    "id,title,content,yjs_state,yjs_state_version,is_pinned,sort_order,created_at,updated_at,version,is_deleted";
+    "id,title,content,yjs_state,yjs_state_version,is_pinned,sort_order,created_at,updated_at,version,is_deleted,
+     COALESCE((SELECT array_agg(t.name ORDER BY lower(t.name))
+        FROM note_tags nt
+        JOIN tags t ON t.user_id=notes.user_id AND t.id=nt.tag_id
+        WHERE nt.user_id=notes.user_id AND nt.note_id=notes.id AND t.is_deleted=false), ARRAY[]::TEXT[]) AS tags";
 
 pub async fn create_note(
     State(state): State<Arc<AppState>>,
@@ -79,10 +85,169 @@ pub async fn get_note(
 pub async fn list_notes(
     State(state): State<Arc<AppState>>,
     AuthUser(user_id): AuthUser,
+    Query(params): Query<ListNotesQuery>,
 ) -> Result<Json<Vec<NoteSummary>>, AppError> {
-    let notes = sqlx::query_as("SELECT id,title,LEFT(content,200) AS preview,is_pinned,created_at,updated_at FROM notes WHERE user_id=$1 AND is_deleted=false ORDER BY is_pinned DESC,sort_order DESC,updated_at DESC")
-        .bind(user_id).fetch_all(state.db.inner()).await?;
+    let notes = if let Some(tag) = params.tag.as_deref().map(normalize_tag_name).filter(|tag| !tag.is_empty()) {
+        sqlx::query_as(
+            "SELECT n.id,n.title,LEFT(n.content,200) AS preview,n.is_pinned,n.created_at,n.updated_at,
+                    COALESCE(array_agg(all_tags.name ORDER BY lower(all_tags.name)) FILTER (WHERE all_tags.id IS NOT NULL), ARRAY[]::TEXT[]) AS tags
+             FROM notes n
+             JOIN note_tags filter_nt ON filter_nt.user_id=n.user_id AND filter_nt.note_id=n.id
+             JOIN tags filter_t ON filter_t.user_id=n.user_id AND filter_t.id=filter_nt.tag_id
+             LEFT JOIN note_tags all_nt ON all_nt.user_id=n.user_id AND all_nt.note_id=n.id
+             LEFT JOIN tags all_tags ON all_tags.user_id=n.user_id AND all_tags.id=all_nt.tag_id AND all_tags.is_deleted=false
+             WHERE n.user_id=$1 AND n.is_deleted=false AND filter_t.is_deleted=false AND filter_t.normalized_name=$2
+             GROUP BY n.id,n.title,n.content,n.is_pinned,n.created_at,n.updated_at,n.sort_order
+             ORDER BY n.is_pinned DESC,n.sort_order DESC,n.updated_at DESC",
+        )
+        .bind(user_id)
+        .bind(tag)
+        .fetch_all(state.db.inner())
+        .await?
+    } else {
+        sqlx::query_as(
+            "SELECT n.id,n.title,LEFT(n.content,200) AS preview,n.is_pinned,n.created_at,n.updated_at,
+                    COALESCE(array_agg(t.name ORDER BY lower(t.name)) FILTER (WHERE t.id IS NOT NULL), ARRAY[]::TEXT[]) AS tags
+             FROM notes n
+             LEFT JOIN note_tags nt ON nt.user_id=n.user_id AND nt.note_id=n.id
+             LEFT JOIN tags t ON t.user_id=n.user_id AND t.id=nt.tag_id AND t.is_deleted=false
+             WHERE n.user_id=$1 AND n.is_deleted=false
+             GROUP BY n.id,n.title,n.content,n.is_pinned,n.created_at,n.updated_at,n.sort_order
+             ORDER BY n.is_pinned DESC,n.sort_order DESC,n.updated_at DESC",
+        )
+        .bind(user_id)
+        .fetch_all(state.db.inner())
+        .await?
+    };
     Ok(Json(notes))
+}
+
+#[derive(serde::Deserialize)]
+pub struct ListNotesQuery {
+    pub tag: Option<String>,
+}
+
+pub async fn list_tags(
+    State(state): State<Arc<AppState>>,
+    AuthUser(user_id): AuthUser,
+) -> Result<Json<Vec<TagSummary>>, AppError> {
+    let tags = sqlx::query_as(
+        "SELECT t.id,t.name,t.normalized_name,t.color,COUNT(n.id)::BIGINT AS note_count
+         FROM tags t
+         LEFT JOIN note_tags nt ON nt.user_id=t.user_id AND nt.tag_id=t.id
+         LEFT JOIN notes n ON n.user_id=t.user_id AND n.id=nt.note_id AND n.is_deleted=false
+         WHERE t.user_id=$1 AND t.is_deleted=false
+         GROUP BY t.id,t.name,t.normalized_name,t.color
+         ORDER BY note_count DESC, lower(t.name) ASC",
+    )
+    .bind(user_id)
+    .fetch_all(state.db.inner())
+    .await?;
+    Ok(Json(tags))
+}
+
+pub async fn update_note_tags(
+    State(state): State<Arc<AppState>>,
+    AuthUser(user_id): AuthUser,
+    Path(id): Path<String>,
+    Json(req): Json<UpdateNoteTagsRequest>,
+) -> Result<Json<Note>, AppError> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut tx = state.db.inner().begin().await?;
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM notes WHERE user_id=$1 AND id=$2 AND is_deleted=false)",
+    )
+    .bind(user_id)
+    .bind(&id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if !exists {
+        tx.rollback().await?;
+        return Err(AppError::NotFound);
+    }
+    let tag_names = normalize_tag_names(&req.tags);
+    let mut next_tag_ids = Vec::new();
+    for name in tag_names {
+        let normalized = normalize_tag_name(&name);
+        let tag_id = sqlx::query_scalar::<_, String>(
+            "INSERT INTO tags(id,user_id,name,normalized_name,color,created_at,updated_at,is_deleted,created_by,updated_by)
+             VALUES ($1,$2,$3,$4,NULL,$5,$5,false,$2,$2)
+             ON CONFLICT(user_id,normalized_name) DO UPDATE SET
+                name=EXCLUDED.name, updated_at=EXCLUDED.updated_at, is_deleted=false, updated_by=EXCLUDED.updated_by
+             RETURNING id",
+        )
+        .bind(tag_id_from_normalized(&normalized))
+        .bind(user_id)
+        .bind(&name)
+        .bind(&normalized)
+        .bind(&now)
+        .fetch_one(&mut *tx)
+        .await?;
+        let tag_payload = fetch_tag(&mut tx, user_id, &tag_id).await?;
+        append_change(
+            &mut tx,
+            user_id,
+            "tag",
+            &tag_id,
+            "upsert",
+            ChangePayload::Tag(tag_payload),
+        )
+        .await?;
+        next_tag_ids.push(tag_id);
+    }
+    let current_ids: Vec<String> =
+        sqlx::query_scalar("SELECT tag_id FROM note_tags WHERE user_id=$1 AND note_id=$2")
+            .bind(user_id)
+            .bind(&id)
+            .fetch_all(&mut *tx)
+            .await?;
+    for tag_id in &current_ids {
+        if !next_tag_ids.iter().any(|next| next == tag_id) {
+            let relation_id = note_tag_id(&id, tag_id);
+            sqlx::query("DELETE FROM note_tags WHERE user_id=$1 AND id=$2")
+                .bind(user_id)
+                .bind(&relation_id)
+                .execute(&mut *tx)
+                .await?;
+            append_change(&mut tx, user_id, "note_tag", &relation_id, "delete", ChangePayload::None).await?;
+        }
+    }
+    for tag_id in &next_tag_ids {
+        let relation_id = note_tag_id(&id, tag_id);
+        let inserted = sqlx::query(
+            "INSERT INTO note_tags(id,user_id,note_id,tag_id,created_at,created_by,updated_by)
+             VALUES($1,$2,$3,$4,$5,$2,$2)
+             ON CONFLICT(user_id,note_id,tag_id) DO NOTHING",
+        )
+        .bind(&relation_id)
+        .bind(user_id)
+        .bind(&id)
+        .bind(tag_id)
+        .bind(&now)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        if inserted > 0 {
+            let relation_payload = fetch_note_tag(&mut tx, user_id, &relation_id).await?;
+            append_change(
+                &mut tx,
+                user_id,
+                "note_tag",
+                &relation_id,
+                "upsert",
+                ChangePayload::NoteTag(relation_payload),
+            )
+            .await?;
+        }
+    }
+    let note: Note = sqlx::query_as(&format!("SELECT {NOTE_COLUMNS} FROM notes WHERE id=$1 AND user_id=$2"))
+        .bind(&id)
+        .bind(user_id)
+        .fetch_one(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    notify(&state, user_id, &id, "upsert");
+    Ok(Json(note))
 }
 
 pub async fn reorder_notes(
@@ -355,7 +520,16 @@ pub async fn search_notes(
     if params.q.trim().is_empty() {
         return Ok(Json(vec![]));
     }
-    let notes = sqlx::query_as("SELECT id,title,LEFT(content,200) AS preview,is_pinned,created_at,updated_at FROM notes WHERE user_id=$1 AND is_deleted=false AND search_vector @@ plainto_tsquery('simple',$2) ORDER BY ts_rank(search_vector,plainto_tsquery('simple',$2)) DESC LIMIT 50")
+    let notes = sqlx::query_as(
+        "SELECT n.id,n.title,LEFT(n.content,200) AS preview,n.is_pinned,n.created_at,n.updated_at,
+                COALESCE(array_agg(t.name ORDER BY lower(t.name)) FILTER (WHERE t.id IS NOT NULL), ARRAY[]::TEXT[]) AS tags
+         FROM notes n
+         LEFT JOIN note_tags nt ON nt.user_id=n.user_id AND nt.note_id=n.id
+         LEFT JOIN tags t ON t.user_id=n.user_id AND t.id=nt.tag_id AND t.is_deleted=false
+         WHERE n.user_id=$1 AND n.is_deleted=false AND n.search_vector @@ plainto_tsquery('simple',$2)
+         GROUP BY n.id,n.title,n.content,n.is_pinned,n.created_at,n.updated_at,n.search_vector
+         ORDER BY ts_rank(n.search_vector,plainto_tsquery('simple',$2)) DESC LIMIT 50",
+    )
         .bind(user_id).bind(params.q).fetch_all(state.db.inner()).await?;
     Ok(Json(notes))
 }
@@ -365,7 +539,14 @@ pub async fn list_deleted_notes(
     AuthUser(user_id): AuthUser,
 ) -> Result<Json<Vec<NoteSummary>>, AppError> {
     let notes = sqlx::query_as(
-        "SELECT id,title,LEFT(content,200) AS preview,is_pinned,created_at,updated_at FROM notes WHERE user_id=$1 AND is_deleted=true ORDER BY updated_at DESC",
+        "SELECT n.id,n.title,LEFT(n.content,200) AS preview,n.is_pinned,n.created_at,n.updated_at,
+                COALESCE(array_agg(t.name ORDER BY lower(t.name)) FILTER (WHERE t.id IS NOT NULL), ARRAY[]::TEXT[]) AS tags
+         FROM notes n
+         LEFT JOIN note_tags nt ON nt.user_id=n.user_id AND nt.note_id=n.id
+         LEFT JOIN tags t ON t.user_id=n.user_id AND t.id=nt.tag_id AND t.is_deleted=false
+         WHERE n.user_id=$1 AND n.is_deleted=true
+         GROUP BY n.id,n.title,n.content,n.is_pinned,n.created_at,n.updated_at
+         ORDER BY n.updated_at DESC",
     )
     .bind(user_id)
     .fetch_all(state.db.inner())
@@ -571,6 +752,69 @@ pub async fn clear_versions(
     .execute(state.db.inner())
     .await?;
     Ok(Json(result.rows_affected() > 0))
+}
+
+async fn fetch_tag(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user_id: Uuid,
+    id: &str,
+) -> Result<crate::models::Tag, AppError> {
+    Ok(sqlx::query_as(
+        "SELECT id,name,normalized_name,color,created_at,updated_at,is_deleted
+         FROM tags WHERE user_id=$1 AND id=$2",
+    )
+    .bind(user_id)
+    .bind(id)
+    .fetch_one(&mut **tx)
+    .await?)
+}
+
+async fn fetch_note_tag(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user_id: Uuid,
+    id: &str,
+) -> Result<crate::models::NoteTag, AppError> {
+    Ok(sqlx::query_as(
+        "SELECT id,note_id,tag_id,created_at
+         FROM note_tags WHERE user_id=$1 AND id=$2",
+    )
+    .bind(user_id)
+    .bind(id)
+    .fetch_one(&mut **tx)
+    .await?)
+}
+
+fn normalize_tag_names(names: &[String]) -> Vec<String> {
+    let mut seen = std::collections::BTreeSet::new();
+    names
+        .iter()
+        .filter_map(|name| {
+            let display = name.trim().trim_start_matches('#').trim();
+            let normalized = normalize_tag_name(display);
+            if normalized.is_empty() || !seen.insert(normalized) {
+                None
+            } else {
+                Some(display.chars().take(40).collect())
+            }
+        })
+        .collect()
+}
+
+fn normalize_tag_name(name: &str) -> String {
+    name.trim()
+        .trim_start_matches('#')
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+fn note_tag_id(note_id: &str, tag_id: &str) -> String {
+    format!("{:x}", Sha256::digest(format!("{note_id}:{tag_id}")))
+}
+
+fn tag_id_from_normalized(normalized_name: &str) -> String {
+    format!("{:x}", Sha256::digest(format!("tag:{normalized_name}")))
 }
 
 fn extract_title(content: &str) -> String {

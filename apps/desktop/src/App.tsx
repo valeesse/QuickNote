@@ -43,6 +43,9 @@ const NoteEditor = React.lazy(() =>
 export default function App() {
   const {
     notes,
+    tags,
+    selectedTag,
+    setSelectedTag,
     activeNote,
     deletedNotes,
     versions,
@@ -55,6 +58,7 @@ export default function App() {
     updateNote,
     deleteNote,
     togglePin,
+    updateNoteTags,
     reorderNotes,
     loadNotes,
     loadDeletedNotes,
@@ -213,9 +217,12 @@ export default function App() {
         clipboardCount={clipboard.items.length}
         clipboardItems={clipboard.items}
         notes={notes}
+        tags={tags}
+        selectedTag={selectedTag}
         activeNoteId={activeNote?.id ?? null}
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
+        onSelectTag={setSelectedTag}
         onSelectNote={selectNote}
         onCreateNote={createNote}
         onDeleteNote={(id) => void handleDeleteNote(id)}
@@ -280,6 +287,8 @@ export default function App() {
               onSaveAttachment={saveAttachment}
               onResolveAttachment={resolveAttachment}
               onOpenHistory={handleOpenHistory}
+              onUpdateTags={updateNoteTags}
+              tags={tags}
               saveStatus={saveStatus}
               errorMessage={errorMessage}
               isSyncing={sync.status === "syncing"}

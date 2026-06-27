@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { convertFileSrc, invoke, isTauri } from "@/utils/tauri";
-import type { Attachment, Note, NoteSummary, NoteVersion, SaveStatus } from "@/types";
+import type { Attachment, Note, NoteSummary, NoteVersion, SaveStatus, TagSummary } from "@/types";
 
 interface DraftState {
   content: string;
@@ -23,6 +23,8 @@ export function useNotes() {
   const [activeNote, setActiveNote] = useState<Note | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [deletedNotes, setDeletedNotes] = useState<NoteSummary[]>([]);
+  const [tags, setTags] = useState<TagSummary[]>([]);
+  const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [versions, setVersions] = useState<NoteVersion[]>([]);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -45,7 +47,12 @@ export function useNotes() {
     try {
       setIsLoading(true);
       setErrorMessage(null);
-      if (searchQuery.trim()) {
+      if (selectedTag) {
+        const results = await invoke<NoteSummary[]>("list_notes_by_tag", {
+          tag: selectedTag,
+        });
+        if (requestId === loadRequestRef.current) setNotes(results);
+      } else if (searchQuery.trim()) {
         const results = await invoke<NoteSummary[]>("search_notes", {
           query: searchQuery,
         });
@@ -54,13 +61,15 @@ export function useNotes() {
         const results = await invoke<NoteSummary[]>("list_notes");
         if (requestId === loadRequestRef.current) setNotes(results);
       }
+      const tagResults = await invoke<TagSummary[]>("list_tags");
+      if (requestId === loadRequestRef.current) setTags(tagResults);
     } catch (err) {
       console.error("Failed to load notes:", err);
       setErrorMessage(getErrorMessage(err));
     } finally {
       if (requestId === loadRequestRef.current) setIsLoading(false);
     }
-  }, [searchQuery]);
+  }, [searchQuery, selectedTag]);
 
   const saveWithRetry = useCallback(
     async (id: string, content: string, attempts = 3): Promise<Note> => {
@@ -358,6 +367,22 @@ export function useNotes() {
     [activeNote, loadNotes]
   );
 
+  const updateNoteTags = useCallback(
+    async (noteId: string, nextTags: string[]) => {
+      try {
+        setErrorMessage(null);
+        const updated = await invoke<Note | null>("set_note_tags", { noteId, tags: nextTags });
+        if (!updated) throw new Error("便签已不存在或已被删除");
+        setActiveNote((current) => (current?.id === noteId ? updated : current));
+        await loadNotes();
+      } catch (err) {
+        console.error("Failed to update note tags:", err);
+        setErrorMessage(getErrorMessage(err));
+      }
+    },
+    [loadNotes]
+  );
+
   const loadDeletedNotes = useCallback(async () => {
     try {
       const results = await invoke<NoteSummary[]>("list_deleted_notes");
@@ -553,6 +578,9 @@ export function useNotes() {
 
   return {
     notes,
+    tags,
+    selectedTag,
+    setSelectedTag,
     activeNote,
     isLoading,
     deletedNotes,
@@ -566,6 +594,7 @@ export function useNotes() {
     updateNote,
     deleteNote,
     togglePin,
+    updateNoteTags,
     reorderNotes,
     loadNotes,
     loadDeletedNotes,

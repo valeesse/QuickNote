@@ -19,6 +19,8 @@ pub struct Note {
     pub updated_at: String,
     pub version: i64,
     pub is_deleted: bool,
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,6 +32,39 @@ pub struct NoteSummary {
     pub is_pinned: bool,
     pub created_at: String,
     pub updated_at: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
+pub struct Tag {
+    pub id: String,
+    pub name: String,
+    pub normalized_name: String,
+    pub color: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub is_deleted: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
+pub struct TagSummary {
+    pub id: String,
+    pub name: String,
+    pub normalized_name: String,
+    pub color: Option<String>,
+    pub note_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
+pub struct NoteTag {
+    pub id: String,
+    pub note_id: String,
+    pub tag_id: String,
+    pub created_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -156,6 +191,10 @@ pub struct SyncEnvelope {
     pub attachment: Option<AttachmentRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clipboard: Option<ClipboardItem>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<Tag>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note_tag: Option<NoteTag>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -10,6 +10,7 @@ export interface Note {
   updated_at: string;
   version: number;
   is_deleted: boolean;
+  tags: string[];
 }
 
 export interface NoteSummary {
@@ -19,6 +20,15 @@ export interface NoteSummary {
   is_pinned: boolean;
   created_at: string;
   updated_at: string;
+  tags: string[];
+}
+
+export interface TagSummary {
+  id: string;
+  name: string;
+  normalized_name: string;
+  color?: string | null;
+  note_count: number;
 }
 
 export interface ClipboardItem {

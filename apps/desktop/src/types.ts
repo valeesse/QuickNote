@@ -1,4 +1,4 @@
-export type { AppView, ClipboardItem, Note, NoteSummary, NoteVersion, SaveStatus } from "@contracts";
+export type { AppView, ClipboardItem, Note, NoteSummary, NoteVersion, SaveStatus, TagSummary } from "@contracts";
 
 export interface Attachment {
   id: string;
