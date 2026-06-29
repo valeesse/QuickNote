@@ -113,6 +113,10 @@ impl SyncProvider for WebDavProvider {
             .await?;
         self.create_collection(&format!("state/{device_id}/attachment"))
             .await?;
+        self.create_collection(&format!("state/{device_id}/tag"))
+            .await?;
+        self.create_collection(&format!("state/{device_id}/note_tag"))
+            .await?;
         self.create_collection("heads").await?;
         self.create_collection("heads/notes").await?;
         self.create_collection("yjs").await?;
@@ -236,6 +240,8 @@ mod tests {
             "/state/device-a/note",
             "/state/device-a/clipboard",
             "/state/device-a/attachment",
+            "/state/device-a/tag",
+            "/state/device-a/note_tag",
             "/heads",
             "/heads/notes",
             "/yjs",
