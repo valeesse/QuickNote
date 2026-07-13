@@ -13,6 +13,7 @@ use axum::{
     Json,
 };
 use std::sync::Arc;
+use std::net::IpAddr;
 use uuid::Uuid;
 
 pub async fn register(
@@ -187,20 +188,24 @@ fn with_session_cookie(
 
 fn client_ip(headers: &HeaderMap) -> String {
     headers
-        .get("x-forwarded-for")
+        .get("x-real-ip")
         .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(',').next())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
+        .and_then(parse_ip)
         .or_else(|| {
             headers
-                .get("x-real-ip")
+                .get("x-forwarded-for")
                 .and_then(|value| value.to_str().ok())
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
+                // Reverse proxies append the address they observed. Taking the
+                // last valid entry prevents a client-supplied first entry from
+                // bypassing the per-IP authentication limit.
+                .and_then(|value| value.rsplit(',').find_map(parse_ip))
         })
-        .unwrap_or("unknown")
-        .to_string()
+        .map(|ip| ip.to_string())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn parse_ip(value: &str) -> Option<IpAddr> {
+    value.trim().parse().ok()
 }
 
 async fn enforce_rate_limit(
@@ -225,4 +230,41 @@ async fn record_failure(state: &AppState, client_ip: &str, identity: &str) {
 async fn clear_identity_failures(state: &AppState, identity: &str) {
     let mut limiter = state.auth_limiter.lock().await;
     limiter.reset_identity(identity);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::HeaderValue;
+
+    #[test]
+    fn client_ip_prefers_proxy_over_client_supplied_forwarded_address() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-real-ip", HeaderValue::from_static("203.0.113.8"));
+        headers.insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("198.51.100.99, 203.0.113.8"),
+        );
+
+        assert_eq!(client_ip(&headers), "203.0.113.8");
+    }
+
+    #[test]
+    fn client_ip_uses_last_valid_forwarded_address() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("spoofed, 198.51.100.21"),
+        );
+
+        assert_eq!(client_ip(&headers), "198.51.100.21");
+    }
+
+    #[test]
+    fn client_ip_rejects_unparseable_values() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-real-ip", HeaderValue::from_static("not-an-ip"));
+
+        assert_eq!(client_ip(&headers), "unknown");
+    }
 }
