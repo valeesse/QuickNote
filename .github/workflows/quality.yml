@@ -1,0 +1,64 @@
+name: Quality
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend build and E2E
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            apps/desktop/package-lock.json
+            apps/web/package-lock.json
+      - name: Install dependencies
+        run: |
+          npm ci --prefix apps/desktop
+          npm ci --prefix apps/web
+      - name: Build frontends
+        run: |
+          npm run build:desktop
+          npm run build:web
+      - name: Install Playwright Chromium
+        working-directory: apps/desktop
+        run: npx playwright install --with-deps chromium
+      - name: Run desktop E2E tests
+        run: npm run test:e2e
+
+  rust:
+    name: Rust tests and Clippy
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            crates/quicknote-protocol
+            apps/server
+            apps/desktop/src-tauri
+      - name: Run Rust tests
+        run: |
+          npm run test:protocol
+          npm run test:server
+          npm run test:desktop-rust
+      - name: Run Clippy
+        run: npm run lint:rust

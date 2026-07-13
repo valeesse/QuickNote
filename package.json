@@ -11,6 +11,9 @@
     "test:e2e": "npm --prefix apps/desktop run test:e2e",
     "test:desktop-rust": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml",
     "test:server": "cargo test --manifest-path apps/server/Cargo.toml",
-    "test:protocol": "cargo test --manifest-path crates/quicknote-protocol/Cargo.toml"
+    "test:protocol": "cargo test --manifest-path crates/quicknote-protocol/Cargo.toml",
+    "lint:rust": "cargo clippy --manifest-path crates/quicknote-protocol/Cargo.toml --all-targets -- -D warnings && cargo clippy --manifest-path apps/server/Cargo.toml --all-targets -- -D warnings && cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings",
+    "test": "npm run test:protocol && npm run test:server && npm run test:desktop-rust && npm run test:e2e",
+    "verify": "npm run build:desktop && npm run build:web && npm run lint:rust && npm test"
   }
 }

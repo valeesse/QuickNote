@@ -193,7 +193,10 @@ npm run test:desktop-rust     # Rust 单元测试
 npm run test:server           # 服务端测试
 npm run test:protocol         # 协议层测试
 npm run test:e2e              # E2E 端到端测试
+npm run verify                # 完整本地门禁（构建、Clippy、全部测试）
 ```
+
+主分支部署由 `Quality` 工作流门禁：只有前端构建、E2E、Rust 测试与 Clippy 全部通过后，生产部署才会启动。
 
 基础设施集成测试使用覆盖文件：
 
