@@ -46,6 +46,11 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -55,6 +60,10 @@ jobs:
             crates/quicknote-protocol
             apps/server
             apps/desktop/src-tauri
+      - name: Build desktop frontend for Tauri
+        run: |
+          npm ci --prefix apps/desktop
+          npm run build:desktop
       - name: Run Rust tests
         run: |
           npm run test:protocol
