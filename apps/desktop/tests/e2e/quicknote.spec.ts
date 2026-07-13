@@ -1,4 +1,7 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
+
+const noteItem = (page: Page, title: string) =>
+  page.locator("[data-note-id]").filter({ hasText: title }).first();
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
@@ -11,6 +14,7 @@ test.beforeEach(async ({ page }) => {
       updated_at: string;
       version: number;
       is_deleted: boolean;
+      tags: string[];
     };
 
     const key = "quicknote-e2e-db";
@@ -26,6 +30,7 @@ test.beforeEach(async ({ page }) => {
       is_pinned: note.is_pinned,
       created_at: note.created_at,
       updated_at: note.updated_at,
+      tags: note.tags,
     });
     const loadClipboard = (): any[] => JSON.parse(localStorage.getItem(clipboardKey) || "[]");
     const saveClipboard = (items: any[]) => localStorage.setItem(clipboardKey, JSON.stringify(items));
@@ -46,12 +51,44 @@ test.beforeEach(async ({ page }) => {
             updated_at: now,
             version: 1,
             is_deleted: false,
+            tags: [],
           };
           save([note, ...notes]);
           return note;
         }
         if (cmd === "list_notes") return notes.filter((note) => !note.is_deleted).map(summary);
+        if (cmd === "list_notes_by_tag") {
+          const tag = String(args.tag || "").toLowerCase();
+          return notes
+            .filter((note) => !note.is_deleted && note.tags.some((item) => item.toLowerCase() === tag))
+            .map(summary);
+        }
+        if (cmd === "list_tags") {
+          const counts = new Map<string, { name: string; count: number }>();
+          for (const note of notes.filter((item) => !item.is_deleted)) {
+            for (const tag of note.tags) {
+              const normalized = tag.toLowerCase();
+              const current = counts.get(normalized) || { name: tag, count: 0 };
+              current.count += 1;
+              counts.set(normalized, current);
+            }
+          }
+          return [...counts.entries()].map(([normalized_name, item]) => ({
+            id: `tag-${normalized_name}`,
+            name: item.name,
+            normalized_name,
+            color: null,
+            note_count: item.count,
+          }));
+        }
         if (cmd === "get_note") return notes.find((note) => note.id === args.id && !note.is_deleted) || null;
+        if (cmd === "set_note_tags") {
+          const note = notes.find((item) => item.id === args.noteId && !item.is_deleted);
+          if (!note) return null;
+          note.tags = [...new Set((args.tags || []).map((tag: string) => tag.trim()).filter(Boolean))];
+          save(notes);
+          return note;
+        }
         if (cmd === "update_note") {
           const delay = Number(localStorage.getItem("quicknote-e2e-save-delay") || 0);
           if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
@@ -226,13 +263,13 @@ test("creates, edits, inserts an image, searches, and restores after reload", as
     .toContain("attachment://");
 
   await page.reload();
-  const restoredNote = page.getByRole("heading", { name: "中文搜索便签" });
+  const restoredNote = noteItem(page, "中文搜索便签");
   await expect(restoredNote).toBeVisible();
   await restoredNote.click();
   await expect(page.locator(".tiptap img")).toHaveCount(1);
 
   await page.getByPlaceholder("搜索便签...").fill("中文搜索");
-  await expect(page.getByRole("heading", { name: "中文搜索便签" })).toBeVisible();
+  await expect(noteItem(page, "中文搜索便签")).toBeVisible();
 });
 
 test("flushes the current draft before switching notes", async ({ page }) => {
@@ -247,8 +284,8 @@ test("flushes the current draft before switching notes", async ({ page }) => {
   await expect(page.getByText("已保存")).toBeVisible();
 
   await page.reload();
-  await expect(page.getByRole("heading", { name: "不会丢失的第一条便签" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "第二条便签" })).toBeVisible();
+  await expect(noteItem(page, "不会丢失的第一条便签")).toBeVisible();
+  await expect(noteItem(page, "第二条便签")).toBeVisible();
 });
 
 test("does not roll back newer typing when an older save finishes", async ({ page }) => {
@@ -264,7 +301,7 @@ test("does not roll back newer typing when an older save finishes", async ({ pag
   await expect(page.getByText("已保存")).toBeVisible({ timeout: 5_000 });
 
   await page.reload();
-  const restored = page.getByRole("heading", { name: "第一段第二段" });
+  const restored = noteItem(page, "第一段第二段");
   await expect(restored).toBeVisible();
 });
 
@@ -278,7 +315,7 @@ test("recovers a journaled draft when reloaded before debounce", async ({ page }
     .toContain("崩溃后恢复的草稿");
 
   await page.reload();
-  await expect(page.getByRole("heading", { name: "崩溃后恢复的草稿" })).toBeVisible();
+  await expect(noteItem(page, "崩溃后恢复的草稿")).toBeVisible();
   await expect
     .poll(() => page.evaluate(() => localStorage.getItem("quicknote-draft-journal-v1")))
     .toBeNull();
@@ -316,7 +353,7 @@ test("refreshes the active editor after pulling a remote version", async ({ page
     localStorage.setItem("quicknote-e2e-remote-content", "<p>远端新版本</p>");
   });
   await page.reload();
-  await page.getByRole("heading", { name: "本地版本" }).click();
+  await noteItem(page, "本地版本").click();
   await expect(editor).toContainText("本地版本");
   await expect(editor).toContainText("远端新版本", { timeout: 5_000 });
   await expect(editor).not.toContainText("本地版本");
@@ -360,10 +397,10 @@ test("captures, searches, pins, copies, and deletes clipboard history", async ({
   await page.getByRole("button", { name: "剪贴板" }).click();
   await page.getByRole("button", { name: "读取当前剪贴板" }).click();
 
-  await expect(page.getByText("https://example.com/shared")).toBeVisible();
-  await expect(page.getByText("链接", { exact: true })).toBeVisible();
+  await expect(page.getByText("https://example.com/shared").last()).toBeVisible();
+  await expect(page.getByText("链接", { exact: true }).last()).toBeVisible();
   await page.getByPlaceholder("搜索剪贴板历史").fill("example.com");
-  await expect(page.getByText("https://example.com/shared")).toBeVisible();
+  await expect(page.getByText("https://example.com/shared").last()).toBeVisible();
 
   await page.getByTitle("固定").click();
   await expect(page.getByTitle("取消固定")).toBeVisible();
@@ -380,7 +417,7 @@ test("provides mobile navigation and manual clipboard capture", async ({ page })
   await page.evaluate(() => localStorage.setItem("quicknote-e2e-system-clipboard", "移动端剪贴板"));
   await page.getByRole("navigation").getByRole("button", { name: "剪贴板" }).click();
   await page.getByRole("button", { name: "读取当前剪贴板" }).click();
-  await expect(page.getByText("移动端剪贴板")).toBeVisible();
+  await expect(page.getByText("移动端剪贴板").last()).toBeVisible();
 
   await page.getByRole("navigation").getByRole("button", { name: "便签" }).click();
   await expect(page.getByRole("button", { name: "新建", exact: true })).toBeVisible();

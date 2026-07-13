@@ -441,7 +441,7 @@ fn validate_envelope(envelope: &SyncEnvelope) -> Result<(), AppError> {
             envelope.attachment.as_ref().map(|item| item.id.as_str())
                 == Some(envelope.entity_id.as_str())
         }
-        ("clipboard", _) => {
+        ("clipboard", "upsert") => {
             envelope.clipboard.as_ref().map(|item| item.id.as_str())
                 == Some(envelope.entity_id.as_str())
         }
@@ -507,10 +507,13 @@ mod tests {
                 updated_at: "2026-01-01T00:00:00Z".into(),
                 version: 1,
                 is_deleted: false,
+                tags: Vec::new(),
             }),
             yjs_update: None,
             attachment: None,
             clipboard: None,
+            tag: None,
+            note_tag: None,
         }
     }
 
@@ -531,5 +534,15 @@ mod tests {
         let mut value = envelope();
         value.entity_type = "unknown".into();
         assert!(validate_envelope(&value).is_err());
+    }
+
+    #[test]
+    fn accepts_clipboard_delete_without_payload() {
+        let mut value = envelope();
+        value.entity_type = "clipboard".into();
+        value.entity_id = "clipboard-a".into();
+        value.operation = "delete".into();
+        value.note = None;
+        assert!(validate_envelope(&value).is_ok());
     }
 }

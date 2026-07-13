@@ -330,7 +330,7 @@ pub fn sync_clipboard_history(
         let device_id = sync.get_config()?.device_id;
         let captured =
             tauri::async_runtime::block_on(capture_windows_clipboard_history(&db, &device_id))?;
-        return Ok(ClipboardSyncResult { captured });
+        Ok(ClipboardSyncResult { captured })
     }
 
     #[cfg(not(target_os = "windows"))]

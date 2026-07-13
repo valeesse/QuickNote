@@ -33,6 +33,7 @@ export function EditorShell({
   children: ReactNode;
 }) {
   const [tagInput, setTagInput] = useState("");
+  const noteTags = note.tags ?? [];
   const normalizedInput = normalizeTagName(tagInput);
   const matchingTags = useMemo(
     () =>
@@ -42,17 +43,17 @@ export function EditorShell({
           return (
             normalizedInput &&
             normalized.includes(normalizedInput) &&
-            !note.tags.some((item) => normalizeTagName(item) === normalized)
+            !noteTags.some((item) => normalizeTagName(item) === normalized)
           );
         })
         .slice(0, 6),
-    [normalizedInput, note.tags, tagSuggestions],
+    [normalizedInput, noteTags, tagSuggestions],
   );
 
   const addTag = (raw = tagInput) => {
     const value = raw.trim().replace(/^#/, "").trim();
-    if (!value || note.tags.some((tag) => tag.toLowerCase() === value.toLowerCase())) return;
-    onUpdateTags?.([...note.tags, value]);
+    if (!value || noteTags.some((tag) => tag.toLowerCase() === value.toLowerCase())) return;
+    onUpdateTags?.([...noteTags, value]);
     setTagInput("");
   };
 
@@ -78,11 +79,11 @@ export function EditorShell({
       <div className="flex-1 overflow-y-auto" onDoubleClick={() => editor.chain().focus("end").run()}>
         <div className="px-8 pb-1 pt-3">
           <div className="relative flex min-h-8 flex-wrap items-center gap-2 text-xs">
-            {note.tags.map((tag) => (
+            {noteTags.map((tag) => (
               <button
                 key={tag}
                 type="button"
-                onClick={() => onUpdateTags?.(note.tags.filter((item) => item !== tag))}
+                onClick={() => onUpdateTags?.(noteTags.filter((item) => item !== tag))}
                 className="rounded-md bg-blue-50 px-2 py-1 font-medium text-blue-700 hover:bg-blue-100"
                 title="移除标签"
               >

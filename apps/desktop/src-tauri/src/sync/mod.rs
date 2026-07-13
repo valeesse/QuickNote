@@ -242,7 +242,7 @@ impl SyncService {
         // Cloud sync path
         if config.cloud_enabled && !config.cloud_url.is_empty() {
             let cloud_token = self.get_cloud_token(&mut config).await?;
-            let cloud = cloud::CloudProvider::new(&config.cloud_url, &cloud_token);
+            let cloud = cloud::CloudProvider::new(&config.cloud_url, &cloud_token)?;
             db.ensure_sync_bootstrap(&cloud_bootstrap_scope(&config))
                 .map_err(|e| e.to_string())?;
 

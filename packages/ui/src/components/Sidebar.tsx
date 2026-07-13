@@ -566,6 +566,7 @@ function NoteSidebarItem({
   onPointerLeave: () => void;
   onPointerMove: (clientX: number, clientY: number) => void;
 }) {
+  const noteTags = note.tags ?? [];
   return (
     <button
       type="button"
@@ -639,9 +640,9 @@ function NoteSidebarItem({
         </span>
       </span>
       <span className="note-sidebar__item-text">{stripMarkdown(note.preview) || "空便签"}</span>
-      {note.tags.length > 0 && (
+      {noteTags.length > 0 && (
         <span className="mt-2 flex flex-wrap gap-1">
-          {note.tags.slice(0, 3).map((tag) => (
+          {noteTags.slice(0, 3).map((tag) => (
             <span
               key={tag}
               role="button"

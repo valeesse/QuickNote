@@ -3,6 +3,10 @@ use crate::sync::{SyncEnvelope, SyncProvider};
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
+
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
 pub struct CloudProvider {
@@ -53,12 +57,12 @@ pub struct UserInfo {
 }
 
 impl CloudProvider {
-    pub fn new(base_url: &str, token: &str) -> Self {
-        Self {
-            client: Client::new(),
+    pub fn new(base_url: &str, token: &str) -> Result<Self, String> {
+        Ok(Self {
+            client: http_client()?,
             base_url: base_url.trim_end_matches('/').to_string(),
             token: token.to_string(),
-        }
+        })
     }
 
     pub async fn login(
@@ -66,7 +70,7 @@ impl CloudProvider {
         email: &str,
         password: &str,
     ) -> Result<LoginResponse, String> {
-        let client = Client::new();
+        let client = http_client()?;
         let url = format!("{}/api/auth/login", base_url.trim_end_matches('/'));
         let resp = client
             .post(&url)
@@ -146,6 +150,14 @@ impl CloudProvider {
 
         Ok(data)
     }
+}
+
+fn http_client() -> Result<Client, String> {
+    Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(REQUEST_TIMEOUT)
+        .build()
+        .map_err(|error| format!("Failed to initialize cloud HTTP client: {error}"))
 }
 
 #[async_trait]
