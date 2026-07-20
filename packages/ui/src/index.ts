@@ -19,6 +19,8 @@ export { useAttachmentEditorBridge } from "./editor/useAttachmentEditorBridge";
 export type { AttachmentEditorBridgeOptions, InsertedEditorImage } from "./editor/useAttachmentEditorBridge";
 export { useYjsDoc } from "./editor/useYjsDoc";
 export type { YjsDocState } from "./editor/useYjsDoc";
+export { SharedNoteEditor } from "./components/NoteEditor";
+export type { SharedNoteEditorProps } from "./components/NoteEditor";
 
 // Utility functions
 export { compressImageToDataUrl } from "./utils/image";

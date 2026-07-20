@@ -1,22 +1,10 @@
-import { useCallback, useEffect } from "react";
-import Image from "@tiptap/extension-image";
-import Placeholder from "@tiptap/extension-placeholder";
-import TaskList from "@tiptap/extension-task-list";
-import TaskItem from "@tiptap/extension-task-item";
-import Highlight from "@tiptap/extension-highlight";
-import Typography from "@tiptap/extension-typography";
-import { Collaboration } from "@tiptap/extension-collaboration";
-import { Markdown } from "@tiptap/markdown";
-import StarterKit from "@tiptap/starter-kit";
-import { useEditor, EditorContent } from "@tiptap/react";
-import { EditorShell, InlineMarkdownMarkRules, createAttachmentImageExtension, useAttachmentEditorBridge, useYjsDoc } from "@ui/index";
+import { useCallback } from "react";
+import { SharedNoteEditor } from "@ui/index";
 import type { Attachment, Note, SaveStatus, TagSummary } from "@/types";
-
-const AttachmentImage = createAttachmentImageExtension(Image);
 
 interface NoteEditorProps {
   note: Note;
-  onUpdate: (id: string, content: string) => void;
+  onUpdate: (id: string, content: string, yjsState?: number[]) => void;
   onSaveAttachment: (dataUrl: string, filename: string) => Promise<Attachment>;
   onResolveAttachment: (id: string) => Promise<string>;
   onOpenHistory: () => void;
@@ -27,117 +15,43 @@ interface NoteEditorProps {
   isSyncing: boolean;
 }
 
-export function NoteEditor({
-  note,
-  onUpdate,
-  onSaveAttachment,
-  onResolveAttachment,
-  onOpenHistory,
-  onUpdateTags,
-  tags,
-  saveStatus,
-  errorMessage,
-  isSyncing,
-}: NoteEditorProps) {
-  const yjsDoc = useYjsDoc({
-    noteId: note.id,
-    state: note.yjs_state,
-    stateVersion: note.yjs_state_version,
-  });
-  const bridge = useAttachmentEditorBridge({
-    note,
-    isSyncing,
-    onUpdate,
-    managedContent: yjsDoc.isCollaborative,
-    serializeContent: canonicalizeAttachmentReferences,
-    hydrateContent: useCallback(
-      (content: string) => hydrateAttachmentReferences(content, onResolveAttachment),
-      [onResolveAttachment],
-    ),
-    saveImage: useCallback(async (file: File, dataUrl: string) => {
-      const attachment = await onSaveAttachment(dataUrl, file.name);
-      return {
-        src: attachment.path,
-        alt: file.name,
-        attachmentId: attachment.id,
-      };
-    }, [onSaveAttachment]),
-    shouldMigrateContent: useCallback((nextNote: Note) => nextNote.content.includes("data:image/"), []),
-    migrateContent: useCallback(
-      (content: string) => migrateDataUrlImages(content, onSaveAttachment),
-      [onSaveAttachment],
-    ),
-  });
-
-  const editor = useEditor({
-    extensions: [
-      StarterKit.configure({
-        heading: { levels: [1, 2, 3] },
-        codeBlock: { HTMLAttributes: { class: "language-plaintext" } },
-        undoRedo: yjsDoc.isCollaborative ? false : undefined,
-      }),
-      AttachmentImage.configure({
-        inline: false,
-        allowBase64: true,
-        HTMLAttributes: { class: "rounded-lg max-w-full" },
-      }),
-      Placeholder.configure({ placeholder: "开始记录你的想法..." }),
-      TaskList,
-      TaskItem.configure({ nested: true }),
-      Highlight.configure({ multicolor: false }),
-      Typography,
-      InlineMarkdownMarkRules,
-      Markdown.configure({ indentation: { style: "space", size: 2 } }),
-      ...(yjsDoc.isCollaborative
-        ? [Collaboration.configure({ document: yjsDoc.doc, field: "prosemirror" })]
-        : []),
-    ],
-    content: yjsDoc.isCollaborative || note.content.includes("attachment://") ? "" : note.content || "",
-    onUpdate: ({ editor }) => bridge.handleEditorUpdate(editor),
-    editorProps: bridge.editorProps,
-  });
-
-  useEffect(() => {
-    bridge.setEditor(editor);
-  }, [bridge.setEditor, editor]);
-
-  if (!editor) return null;
-
+export function NoteEditor(props: NoteEditorProps) {
+  const { onSaveAttachment, onResolveAttachment } = props;
   return (
-    <EditorShell
-      editor={editor}
-      note={note}
-      saveStatus={saveStatus}
-      errorMessage={errorMessage}
-      isSyncing={isSyncing}
-      onInsertImage={bridge.addImageFromFile}
-      findReplace={bridge.findReplace}
-      onOpenHistory={onOpenHistory}
-      onUpdateTags={(tags) => onUpdateTags(note.id, tags)}
-      tagSuggestions={tags}
-    >
-      <EditorContent editor={editor} />
-    </EditorShell>
+    <SharedNoteEditor
+      {...props}
+      saveImage={useCallback(async (file: File, dataUrl: string) => {
+        const attachment = await onSaveAttachment(dataUrl, file.name);
+        return { src: `attachment://${attachment.id}`, alt: file.name, attachmentId: attachment.id };
+      }, [onSaveAttachment])}
+      resolveImageSrc={onResolveAttachment}
+      serializeContent={canonicalizeAttachmentReferences}
+      hydrateContent={useCallback(
+        (content: string) => hydrateAttachmentReferences(content, onResolveAttachment),
+        [onResolveAttachment],
+      )}
+      shouldMigrateContent={useCallback((note: Note) => note.content.includes("data:image/"), [])}
+      migrateContent={useCallback(
+        (content: string) => migrateDataUrlImages(content, onSaveAttachment),
+        [onSaveAttachment],
+      )}
+    />
   );
 }
 
-// ── Attachment helpers (desktop-specific, using Tauri IPC) ──
-
 async function migrateDataUrlImages(
   content: string,
-  saveAttachment: (dataUrl: string, filename: string) => Promise<Attachment>
+  saveAttachment: (dataUrl: string, filename: string) => Promise<Attachment>,
 ): Promise<string> {
   const doc = new DOMParser().parseFromString(`<main>${content}</main>`, "text/html");
   const images = Array.from(doc.querySelectorAll<HTMLImageElement>("img[src^='data:image/']"));
-
   for (const [index, image] of images.entries()) {
     const src = image.getAttribute("src");
     if (!src) continue;
-    const attachment = await saveAttachment(src, image.getAttribute("alt") || `image-${index + 1}.webp`);
-    image.setAttribute("src", `attachment://${attachment.id}`);
-    image.setAttribute("data-attachment-id", attachment.id);
+    const attachment = await saveAttachment(src, image.alt || `image-${index + 1}.webp`);
+    image.src = `attachment://${attachment.id}`;
+    image.dataset.attachmentId = attachment.id;
   }
-
   return doc.querySelector("main")?.innerHTML ?? content;
 }
 
@@ -146,29 +60,27 @@ function canonicalizeAttachmentReferences(content: string): string {
   const doc = new DOMParser().parseFromString(`<main>${content}</main>`, "text/html");
   for (const image of doc.querySelectorAll<HTMLImageElement>("img[data-attachment-id]")) {
     const id = image.dataset.attachmentId;
-    if (id) image.setAttribute("src", `attachment://${id}`);
+    if (id) image.src = `attachment://${id}`;
   }
   return doc.querySelector("main")?.innerHTML ?? content;
 }
 
 async function hydrateAttachmentReferences(
   content: string,
-  resolveAttachment: (id: string) => Promise<string>
+  resolveAttachment: (id: string) => Promise<string>,
 ): Promise<string> {
   if (!content.includes("attachment://")) return content;
   const doc = new DOMParser().parseFromString(`<main>${content}</main>`, "text/html");
   const images = Array.from(doc.querySelectorAll<HTMLImageElement>("img[src^='attachment://']"));
-  await Promise.all(
-    images.map(async (image) => {
-      const id = image.getAttribute("src")?.slice("attachment://".length);
-      if (!id) return;
-      try {
-        image.src = await resolveAttachment(id);
-        image.dataset.attachmentId = id;
-      } catch {
-        image.alt = image.alt || "附件缺失";
-      }
-    })
-  );
+  await Promise.all(images.map(async (image) => {
+    const id = image.getAttribute("src")?.slice("attachment://".length);
+    if (!id) return;
+    try {
+      image.src = await resolveAttachment(id);
+      image.dataset.attachmentId = id;
+    } catch {
+      image.alt = image.alt || "附件缺失";
+    }
+  }));
   return doc.querySelector("main")?.innerHTML ?? content;
 }

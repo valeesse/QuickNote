@@ -9,6 +9,7 @@
     "dev:web": "npm --prefix apps/web run dev",
     "build:web": "npm --prefix apps/web run build",
     "test:e2e": "npm --prefix apps/desktop run test:e2e",
+    "test:web-e2e": "npm --prefix apps/web run test:e2e",
     "test:desktop-rust": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml",
     "test:server": "cargo test --manifest-path apps/server/Cargo.toml",
     "test:protocol": "cargo test --manifest-path crates/quicknote-protocol/Cargo.toml",

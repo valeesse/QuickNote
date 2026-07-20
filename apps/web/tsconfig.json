@@ -30,9 +30,12 @@
       "react-dom/*": ["node_modules/@types/react-dom/*"],
       "lucide-react": ["node_modules/lucide-react"],
       "yjs": ["node_modules/yjs"],
+      "y-indexeddb": ["node_modules/y-indexeddb"],
+      "y-protocols/*": ["node_modules/y-protocols/*"],
       "yjs/*": ["node_modules/yjs/*"],
       "@tiptap/core": ["node_modules/@tiptap/core"],
       "@tiptap/core/*": ["node_modules/@tiptap/core/*"],
+      "@tiptap/*": ["node_modules/@tiptap/*"],
       "@tiptap/pm/*": ["node_modules/@tiptap/pm/*"]
     }
   },

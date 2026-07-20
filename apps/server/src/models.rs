@@ -3,9 +3,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 pub use quicknote_protocol::{
-    AttachmentRecord, BillingPlan, BillingPrice, CausalVersion, ClipboardItem, EntitlementSummary,
-    Note, NoteSummary, NoteTag, NoteVersion, SubscriptionSummary, SyncEnvelope, Tag, TagSummary,
-    UsageMetric,
+    AttachmentRecord, CausalRelation, CausalVersion, ClipboardItem, Note, NoteSummary, NoteTag,
+    NoteVersion, SyncEnvelope, Tag, TagSummary,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -32,33 +31,6 @@ pub struct AuthRequest {
 pub struct AuthResponse {
     pub token: String,
     pub user: UserResponse,
-}
-
-#[derive(Debug, Serialize)]
-pub struct AccountSummary {
-    pub user: UserResponse,
-    pub plans: Vec<BillingPlan>,
-    pub prices: Vec<BillingPrice>,
-    pub subscription: Option<SubscriptionSummary>,
-    pub entitlements: Vec<EntitlementSummary>,
-    pub usage: Vec<UsageMetric>,
-    pub billing_provider: Option<String>,
-    pub billing_ready: bool,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct CreateCheckoutRequest {
-    pub price_id: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct CheckoutSessionResponse {
-    pub checkout_url: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct BillingPortalResponse {
-    pub management_url: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -132,22 +104,4 @@ pub struct CloudChange {
     pub source_seq: i64,
     pub envelope: serde_json::Value,
     pub created_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, sqlx::FromRow)]
-pub struct SubscriptionRecord {
-    pub plan_id: String,
-    pub price_id: String,
-    pub provider: String,
-    pub status: String,
-    pub cancel_at_period_end: bool,
-    pub current_period_start: Option<DateTime<Utc>>,
-    pub current_period_end: Option<DateTime<Utc>>,
-    pub management_url: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct LemonSqueezyWebhookPayload {
-    pub meta: serde_json::Value,
-    pub data: serde_json::Value,
 }

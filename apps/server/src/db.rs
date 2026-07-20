@@ -19,22 +19,7 @@ impl DbPool {
     }
 
     pub async fn run_migrations(&self) -> Result<(), sqlx::Error> {
-        sqlx::raw_sql(include_str!("../migrations/001_initial.sql"))
-            .execute(&self.pool)
-            .await?;
-        sqlx::raw_sql(include_str!("../migrations/002_sync.sql"))
-            .execute(&self.pool)
-            .await?;
-        sqlx::raw_sql(include_str!("../migrations/003_billing.sql"))
-            .execute(&self.pool)
-            .await?;
-        sqlx::raw_sql(include_str!("../migrations/004_audit_and_access.sql"))
-            .execute(&self.pool)
-            .await?;
-        sqlx::raw_sql(include_str!("../migrations/005_free_history_7_days.sql"))
-            .execute(&self.pool)
-            .await?;
-        Ok(())
+        crate::migrations::run(&self.pool).await
     }
 
     pub fn inner(&self) -> &PgPool {

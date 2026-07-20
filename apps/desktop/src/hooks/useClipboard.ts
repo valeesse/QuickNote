@@ -12,6 +12,7 @@ export function useClipboard() {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const capturingRef = useRef(false);
+  const initialAutoCaptureEnabledRef = useRef(autoCaptureEnabled);
 
   const loadItems = useCallback(async () => {
     if (!isTauri()) return;
@@ -71,28 +72,47 @@ export function useClipboard() {
 
   useEffect(() => {
     if (!isTauri()) return;
-    void invoke<boolean>("clipboard_auto_capture_supported").then((supported) => {
-      setAutoCaptureSupported(supported);
-      if (supported) void invoke<boolean>("prime_clipboard_capture");
-    });
+    void invoke<boolean>("clipboard_auto_capture_supported")
+      .then(async (supported) => {
+        setAutoCaptureSupported(supported);
+        if (!supported) return;
+        await invoke<boolean>("set_clipboard_auto_capture_enabled", {
+          enabled: initialAutoCaptureEnabledRef.current,
+        });
+      })
+      .catch((err) => {
+        setError(getErrorMessage(err));
+      });
   }, []);
 
   useEffect(() => {
     if (!autoCaptureSupported || !autoCaptureEnabled) return;
-    const timer = setInterval(() => {
-      if (document.visibilityState === "visible" && document.hasFocus()) void capture(true);
-    }, 1_500);
-    const onFocus = () => void capture(true);
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    void import("@tauri-apps/api/event")
+      .then(async ({ listen }) => {
+        const stop = await listen<ClipboardItem>("clipboard-captured", () => void loadItems());
+        if (disposed) stop();
+        else unlisten = stop;
+      })
+      .catch(() => {
+        // Browser-based tests and non-Tauri previews do not expose Tauri's event bridge.
+      });
+    const onFocus = () => void loadItems();
     window.addEventListener("focus", onFocus);
     return () => {
-      clearInterval(timer);
+      disposed = true;
+      unlisten?.();
       window.removeEventListener("focus", onFocus);
     };
-  }, [autoCaptureEnabled, autoCaptureSupported, capture]);
+  }, [autoCaptureEnabled, autoCaptureSupported, loadItems]);
 
   const setAutoCaptureEnabled = useCallback((enabled: boolean) => {
     setAutoCaptureEnabledState(enabled);
     window.localStorage.setItem("quicknote-clipboard-auto-capture", String(enabled));
+    void invoke<boolean>("set_clipboard_auto_capture_enabled", { enabled }).catch((err) => {
+      setError(getErrorMessage(err));
+    });
     if (enabled) void capture(true);
   }, [capture]);
 

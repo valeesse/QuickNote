@@ -1,7 +1,7 @@
 use crate::error::AppError;
 use crate::middleware::AuthUser;
 use crate::models::AttachmentRecord;
-use crate::routes::billing::ensure_attachment_quota;
+use crate::routes::access::ensure_attachment_quota;
 use crate::routes::sync::{append_change, ChangePayload};
 use crate::AppState;
 use axum::body::Bytes;

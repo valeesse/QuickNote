@@ -1,6 +1,11 @@
 use crate::error::AppError;
 use crate::AppState;
-use axum::{extract::FromRequestParts, http::request::Parts};
+use axum::{
+    extract::FromRequestParts,
+    http::{request::Parts, Method, Request, StatusCode},
+    middleware::Next,
+    response::Response,
+};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -16,6 +21,25 @@ pub struct Claims {
 }
 
 pub struct AuthUser(pub Uuid);
+
+pub async fn validate_origin(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    request: Request<axum::body::Body>,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    let safe = matches!(
+        *request.method(),
+        Method::GET | Method::HEAD | Method::OPTIONS
+    );
+    if !safe {
+        if let Some(origin) = request.headers().get(axum::http::header::ORIGIN) {
+            if origin.to_str().ok() != Some(state.config.allowed_origin.as_str()) {
+                return Err(StatusCode::FORBIDDEN);
+            }
+        }
+    }
+    Ok(next.run(request).await)
+}
 
 impl FromRequestParts<Arc<AppState>> for AuthUser {
     type Rejection = AppError;
@@ -38,7 +62,10 @@ impl FromRequestParts<Arc<AppState>> for AuthUser {
             })
             .ok_or(AppError::Auth)?;
 
-        Ok(AuthUser(authenticate_token(&token, &state.config.jwt_secret)?))
+        Ok(AuthUser(authenticate_token(
+            &token,
+            &state.config.jwt_secret,
+        )?))
     }
 }
 

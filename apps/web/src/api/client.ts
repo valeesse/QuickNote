@@ -1,10 +1,4 @@
-import type {
-  AccountSummary,
-  AuthResponse,
-  BillingPortalResponse,
-  CheckoutSessionResponse,
-  CreateCheckoutRequest,
-} from "@/types";
+import type { AuthResponse } from "@/types";
 
 const USER_KEY = "quicknote-user";
 const AUTH_EXPIRED_EVENT = "quicknote-auth-expired";
@@ -134,6 +128,14 @@ export const notesApi = {
     apiFetch<import("@/types").NoteSummary[]>(
       tag ? `/api/notes?tag=${encodeURIComponent(tag)}` : "/api/notes",
     ),
+  page: (cursor?: string | null, tag?: string | null, limit = 50) => {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (cursor) params.set("cursor", cursor);
+    if (tag) params.set("tag", tag);
+    return apiFetch<{ items: import("@/types").NoteSummary[]; next_cursor: string | null }>(
+      `/api/notes/page?${params}`,
+    );
+  },
   get: (id: string) => apiFetch<import("@/types").Note>(`/api/notes/${id}`),
   tags: () => apiFetch<import("@/types").TagSummary[]>("/api/tags"),
   setTags: (id: string, tags: string[]) =>
@@ -218,17 +220,4 @@ export const attachmentsApi = {
     const response = await authenticatedFetch(`/api/attachments/${id}`, { method: "GET" });
     return response.blob();
   },
-};
-
-export const billingApi = {
-  summary: () => apiFetch<AccountSummary>("/api/account/summary"),
-  createCheckout: (payload: CreateCheckoutRequest) =>
-    apiFetch<CheckoutSessionResponse>("/api/billing/checkout", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    }),
-  portal: () =>
-    apiFetch<BillingPortalResponse>("/api/billing/portal", {
-      method: "POST",
-    }),
 };

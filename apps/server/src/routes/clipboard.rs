@@ -9,12 +9,13 @@ use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
 const COLUMNS: &str = "id,kind,content,preview,source_device,created_at,updated_at,last_copied_at,capture_count,is_pinned,is_deleted";
+const CLIPBOARD_RETENTION_LIMIT: i64 = 500;
 
 pub async fn list_items(
     State(state): State<Arc<AppState>>,
     AuthUser(user_id): AuthUser,
 ) -> Result<Json<Vec<ClipboardItem>>, AppError> {
-    let query = format!("SELECT {COLUMNS} FROM clipboard_items WHERE user_id=$1 AND is_deleted=false ORDER BY is_pinned DESC,last_copied_at DESC,created_at DESC LIMIT 300");
+    let query = format!("SELECT {COLUMNS} FROM clipboard_items WHERE user_id=$1 AND is_deleted=false ORDER BY is_pinned DESC,last_copied_at DESC,created_at DESC,id DESC LIMIT {CLIPBOARD_RETENTION_LIMIT}");
     Ok(Json(
         sqlx::query_as(&query)
             .bind(user_id)
@@ -77,9 +78,48 @@ pub async fn capture(
         ChangePayload::Clipboard(item.clone()),
     )
     .await?;
+    let evicted = prune_clipboard_items(&mut tx, user_id).await?;
+    for evicted_item in &evicted {
+        append_change(
+            &mut tx,
+            user_id,
+            "clipboard",
+            &evicted_item.id,
+            "delete",
+            ChangePayload::Clipboard(evicted_item.clone()),
+        )
+        .await?;
+    }
     tx.commit().await?;
     notify(&state, user_id, &id, "upsert");
+    for evicted_item in evicted {
+        notify(&state, user_id, &evicted_item.id, "delete");
+    }
     Ok(Json(item))
+}
+
+async fn prune_clipboard_items(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user_id: uuid::Uuid,
+) -> Result<Vec<ClipboardItem>, AppError> {
+    let query = format!(
+        "SELECT {COLUMNS} FROM clipboard_items
+         WHERE user_id=$1 AND is_deleted=false
+         ORDER BY is_pinned DESC,last_copied_at DESC,created_at DESC,id DESC
+         OFFSET {CLIPBOARD_RETENTION_LIMIT}"
+    );
+    let evicted: Vec<ClipboardItem> = sqlx::query_as(&query)
+        .bind(user_id)
+        .fetch_all(&mut **tx)
+        .await?;
+    for item in &evicted {
+        sqlx::query("DELETE FROM clipboard_items WHERE user_id=$1 AND id=$2")
+            .bind(user_id)
+            .bind(&item.id)
+            .execute(&mut **tx)
+            .await?;
+    }
+    Ok(evicted)
 }
 
 pub async fn delete_item(

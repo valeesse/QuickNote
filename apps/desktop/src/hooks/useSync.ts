@@ -73,6 +73,18 @@ export function useSync({
     }
   }, []);
 
+  const syncIfNeeded = useCallback(async () => {
+    const cfg = configRef.current;
+    if ((!cfg?.enabled && !cfg?.cloud_enabled) || syncingRef.current) return;
+    try {
+      const hasPendingChanges = await invoke<boolean>("has_pending_sync_changes");
+      if (hasPendingChanges) await syncNow();
+    } catch (err) {
+      setError(getErrorMessage(err));
+      setStatus("error");
+    }
+  }, [syncNow]);
+
   const testWebdav = useCallback(async (endpoint: string, username: string, password: string) => {
     await invoke<void>("test_webdav_connection", { endpoint, username, password });
   }, []);
@@ -103,14 +115,14 @@ export function useSync({
   }, [loadConfig, syncNow]);
 
   useEffect(() => {
-    const timer = setInterval(() => void syncNow(), 60_000);
-    const onFocus = () => void syncNow();
+    const timer = setInterval(() => void syncIfNeeded(), 60_000);
+    const onFocus = () => void syncIfNeeded();
     window.addEventListener("focus", onFocus);
     return () => {
       clearInterval(timer);
       window.removeEventListener("focus", onFocus);
     };
-  }, [syncNow]);
+  }, [syncIfNeeded]);
 
   return {
     config,

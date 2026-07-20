@@ -13,6 +13,9 @@ use tauri::Manager;
 use tauri_plugin_autostart::ManagerExt;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
+const AUTOSTART_ARG: &str = "--autostart";
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     use tauri::{
         menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
@@ -140,8 +143,16 @@ pub fn run() {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let shortcut_runtime = Arc::new(shortcuts::ShortcutRuntime::default());
 
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    let launched_from_autostart = std::env::args().any(|arg| arg == AUTOSTART_ARG);
+
     let builder = tauri::Builder::default()
-        .plugin(tauri_plugin_autostart::Builder::new().build())
+        // Pass a marker to distinguish an OS login launch from a normal launch.
+        .plugin(
+            tauri_plugin_autostart::Builder::new()
+                .arg(AUTOSTART_ARG)
+                .build(),
+        )
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_clipboard_manager::init());
 
@@ -173,7 +184,8 @@ pub fn run() {
             let sync_service = Arc::new(SyncService::new(app_dir.join("sync.json")));
             app.manage(sync_service.clone());
 
-            app.manage(ClipboardCaptureState::default());
+            let clipboard_capture_state = ClipboardCaptureState::default();
+            app.manage(clipboard_capture_state.clone());
 
             let attachments_dir = app
                 .path()
@@ -183,6 +195,17 @@ pub fn run() {
             std::fs::create_dir_all(&attachments_dir).expect("failed to create attachments dir");
             let app_paths = Arc::new(AppPaths { attachments_dir });
             app.manage(app_paths.clone());
+
+            let device_id = sync_service
+                .get_config()
+                .expect("failed to initialize sync config")
+                .device_id;
+            commands::start_clipboard_monitor(
+                app.handle().clone(),
+                db_arc.clone(),
+                device_id,
+                clipboard_capture_state,
+            );
 
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             {
@@ -210,8 +233,13 @@ pub fn run() {
                         let _ = hide_handle.hide();
                     }
                 });
-                let _ = main_window.show();
-                let _ = main_window.set_focus();
+                // Keep the UI hidden when the operating system starts the app at login.
+                // The tray icon and global shortcuts remain available, and the user can
+                // explicitly reveal the window from the tray menu or its left-click action.
+                if !launched_from_autostart {
+                    let _ = main_window.show();
+                    let _ = main_window.set_focus();
+                }
             }
 
             Ok(())
@@ -244,8 +272,10 @@ pub fn run() {
             commands::set_sync_config,
             commands::test_webdav_connection,
             commands::test_cloud_connection,
+            commands::has_pending_sync_changes,
             commands::sync_now,
             commands::clipboard_auto_capture_supported,
+            commands::set_clipboard_auto_capture_enabled,
             commands::sync_clipboard_history,
             commands::capture_clipboard,
             commands::prime_clipboard_capture,

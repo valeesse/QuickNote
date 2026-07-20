@@ -12,8 +12,8 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use std::sync::Arc;
 use std::net::IpAddr;
+use std::sync::Arc;
 use uuid::Uuid;
 
 pub async fn register(

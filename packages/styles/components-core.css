@@ -1,0 +1,63 @@
+/* ── Shared component styles ── */
+
+/* Scrollbar */
+* {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+*::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+/* Note card */
+.note-card {
+  appearance: none;
+  background: transparent;
+  border-left: 3px solid transparent;
+  color: inherit;
+  min-height: 88px;
+  transition:
+    background 160ms ease,
+    box-shadow 160ms ease,
+    border-color 160ms ease;
+}
+
+.note-card:hover {
+  background: var(--qn-color-surface-muted);
+  box-shadow: var(--qn-shadow-card);
+}
+
+.note-card.active {
+  border-left: 3px solid var(--qn-color-primary-border);
+  background: var(--qn-color-primary-soft);
+}
+
+.note-card:focus-visible {
+  position: relative;
+  z-index: 1;
+  outline: none;
+  box-shadow: inset 0 0 0 2px rgb(37 99 235 / 0.45);
+}
+
+.focus-ring {
+  outline: none;
+}
+
+.focus-ring:focus-visible {
+  box-shadow: var(--qn-focus-ring);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

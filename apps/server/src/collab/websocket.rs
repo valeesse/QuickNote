@@ -1,3 +1,5 @@
+use super::store::{load_note_state, persist_projection, persist_update, ProjectionResult};
+use super::CollabEvent;
 use crate::error::AppError;
 use crate::middleware::{authenticate_token, extract_session_cookie};
 use crate::AppState;
@@ -8,15 +10,31 @@ use axum::response::IntoResponse;
 use futures::{SinkExt, StreamExt};
 use serde::Deserialize;
 use std::sync::Arc;
+use tokio::sync::mpsc;
 use uuid::Uuid;
-use yrs::updates::decoder::Decode;
-use yrs::{Doc, ReadTxn, StateVector, Transact, Update};
 
 #[derive(Debug, Deserialize)]
 pub struct CollabQuery {
     token: Option<String>,
     client_id: Option<String>,
 }
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ClientMessage {
+    Projection {
+        projection_id: Uuid,
+        html: String,
+        state_vector: String,
+    },
+    Awareness {
+        update: String,
+    },
+}
+
+const MAX_YJS_UPDATE_BYTES: usize = 2 * 1024 * 1024;
+const MAX_PROJECTION_BYTES: usize = 10 * 1024 * 1024;
+const UPDATE_MAGIC: &[u8; 4] = b"QNUP";
 
 pub async fn note_socket(
     State(state): State<Arc<AppState>>,
@@ -36,7 +54,6 @@ pub async fn note_socket(
         .ok_or(AppError::Auth)?;
     let user_id = authenticate_token(&token, &state.config.jwt_secret)?;
     let client_id = query.client_id.unwrap_or_else(|| "websocket".to_string());
-
     Ok(ws.on_upgrade(move |socket| handle_socket(state, user_id, note_id, client_id, socket)))
 }
 
@@ -48,126 +65,148 @@ async fn handle_socket(
     socket: WebSocket,
 ) {
     let room = format!("{user_id}:{note_id}");
-    let mut receiver = state.collab_hub.subscribe(&room);
+    let Ok(Some((initial, version, bootstrap))) = load_note_state(&state, user_id, &note_id).await
+    else {
+        return;
+    };
     let (mut sender, mut incoming) = socket.split();
-
-    if let Ok(Some(state_update)) = load_note_state(&state, user_id, &note_id).await {
-        if sender
-            .send(Message::Binary(state_update.into()))
-            .await
-            .is_err()
-        {
-            return;
-        }
+    let sync = json_message(serde_json::json!({
+        "type": "sync", "bootstrap": bootstrap, "state_version": version
+    }));
+    if sender.send(sync).await.is_err()
+        || sender.send(Message::Binary(initial.into())).await.is_err()
+    {
+        return;
     }
 
+    let (out_tx, mut out_rx) = mpsc::channel::<Message>(256);
+    let writer = tokio::spawn(async move {
+        while let Some(message) = out_rx.recv().await {
+            if sender.send(message).await.is_err() {
+                break;
+            }
+        }
+    });
+    let mut receiver = state.collab_hub.subscribe(&room);
+    let broadcast_tx = out_tx.clone();
     let outbound = tokio::spawn(async move {
-        while let Ok(update) = receiver.recv().await {
-            if sender.send(Message::Binary(update.into())).await.is_err() {
+        while let Ok(event) = receiver.recv().await {
+            let message = match event {
+                CollabEvent::Update(update) => Message::Binary(update.into()),
+                CollabEvent::Awareness(update) => {
+                    json_message(serde_json::json!({ "type": "awareness", "update": update }))
+                }
+            };
+            if broadcast_tx.send(message).await.is_err() {
                 break;
             }
         }
     });
 
     while let Some(Ok(message)) = incoming.next().await {
-        let Message::Binary(update) = message else {
-            if matches!(message, Message::Close(_)) {
-                break;
+        let result = match message {
+            Message::Binary(frame) => {
+                handle_update(
+                    &state, user_id, &note_id, &client_id, &room, &out_tx, &frame,
+                )
+                .await
             }
-            continue;
+            Message::Text(text) => {
+                handle_text(&state, user_id, &note_id, &out_tx, text.as_str()).await
+            }
+            Message::Close(_) => break,
+            _ => Ok(()),
         };
-        let update = update.to_vec();
-        match persist_update(&state, user_id, &note_id, &client_id, &update).await {
-            Ok(()) => state.collab_hub.broadcast(&room, update),
-            Err(error) => {
-                tracing::warn!(%user_id, note_id = %note_id, error = %error, "failed to persist yjs update");
-                break;
-            }
+        if let Err(error) = result {
+            tracing::warn!(%user_id, note_id = %note_id, error = %error, "collaboration message failed");
+            let _ = out_tx
+                .send(json_message(serde_json::json!({ "type": "error" })))
+                .await;
+            break;
         }
     }
-
     outbound.abort();
+    writer.abort();
 }
 
-async fn load_note_state(
-    state: &AppState,
-    user_id: Uuid,
-    note_id: &str,
-) -> Result<Option<Vec<u8>>, AppError> {
-    sqlx::query_scalar("SELECT yjs_state FROM notes WHERE user_id=$1 AND id=$2 AND is_deleted=false")
-        .bind(user_id)
-        .bind(note_id)
-        .fetch_optional(state.db.inner())
-        .await
-        .map_err(AppError::from)
-}
-
-async fn persist_update(
+async fn handle_update(
     state: &AppState,
     user_id: Uuid,
     note_id: &str,
     client_id: &str,
-    update: &[u8],
+    room: &str,
+    out: &mpsc::Sender<Message>,
+    frame: &[u8],
 ) -> Result<(), AppError> {
-    let mut tx = state.db.inner().begin().await?;
-    let existing: Option<Vec<u8>> = sqlx::query_scalar(
-        "SELECT yjs_state FROM notes WHERE user_id=$1 AND id=$2 AND is_deleted=false FOR UPDATE",
-    )
-    .bind(user_id)
-    .bind(note_id)
-    .fetch_optional(&mut *tx)
-    .await?;
-
-    let Some(compacted) = merge_update(existing.as_deref(), update)? else {
-        tx.rollback().await?;
-        return Err(AppError::NotFound);
-    };
-
-    sqlx::query(
-        "INSERT INTO yjs_updates(user_id, note_id, update, source_client_id)
-         VALUES ($1,$2,$3,$4)",
-    )
-    .bind(user_id)
-    .bind(note_id)
-    .bind(update)
-    .bind(client_id)
-    .execute(&mut *tx)
-    .await?;
-
-    sqlx::query(
-        "UPDATE notes
-         SET yjs_state=$3,yjs_state_version=yjs_state_version+1,updated_at=$4,updated_by=$1
-         WHERE user_id=$1 AND id=$2",
-    )
-    .bind(user_id)
-    .bind(note_id)
-    .bind(compacted)
-    .bind(chrono::Utc::now().to_rfc3339())
-    .execute(&mut *tx)
-    .await?;
-
-    tx.commit().await?;
-    Ok(())
+    let (update_id, update) = decode_update_frame(frame)?;
+    if update.len() > MAX_YJS_UPDATE_BYTES {
+        return Err(AppError::BadRequest("Yjs update is too large".into()));
+    }
+    let version = persist_update(state, user_id, note_id, client_id, update_id, update).await?;
+    state
+        .collab_hub
+        .broadcast(room, CollabEvent::Update(update.to_vec()));
+    out.send(json_message(serde_json::json!({
+        "type": "ack", "update_id": update_id, "state_version": version
+    })))
+    .await
+    .map_err(|_| AppError::Internal("Collaboration socket closed".into()))
 }
 
-fn merge_update(existing: Option<&[u8]>, incoming: &[u8]) -> Result<Option<Vec<u8>>, AppError> {
-    let incoming = Update::decode_v1(incoming)
-        .map_err(|error| AppError::BadRequest(format!("Invalid Yjs update: {error}")))?;
-    let doc = Doc::new();
-    if let Some(existing) = existing {
-        let existing = Update::decode_v1(existing)
-            .map_err(|error| AppError::Internal(format!("Invalid stored Yjs state: {error}")))?;
-        doc.transact_mut()
-            .apply_update(existing)
-            .map_err(|error| AppError::Internal(format!("Apply stored Yjs state failed: {error}")))?;
+async fn handle_text(
+    state: &AppState,
+    user_id: Uuid,
+    note_id: &str,
+    out: &mpsc::Sender<Message>,
+    text: &str,
+) -> Result<(), AppError> {
+    let Ok(message) = serde_json::from_str(text) else {
+        return Ok(());
+    };
+    let ClientMessage::Projection {
+        projection_id,
+        html,
+        state_vector,
+    } = message
+    else {
+        let ClientMessage::Awareness { update } = message else {
+            unreachable!()
+        };
+        if update.len() > 128 * 1024 {
+            return Err(AppError::BadRequest("Awareness update is too large".into()));
+        }
+        state.collab_hub.broadcast(
+            &format!("{user_id}:{note_id}"),
+            CollabEvent::Awareness(update),
+        );
+        return Ok(());
+    };
+    if html.len() > MAX_PROJECTION_BYTES {
+        return Err(AppError::BadRequest("Projection is too large".into()));
     }
+    let (message_type, version) =
+        match persist_projection(state, user_id, note_id, html, &state_vector).await? {
+            ProjectionResult::Accepted(version) => ("projection_ack", version),
+            ProjectionResult::Stale(version) => ("projection_rejected", version),
+        };
+    out.send(json_message(serde_json::json!({
+        "type": message_type, "projection_id": projection_id, "state_version": version
+    })))
+    .await
+    .map_err(|_| AppError::Internal("Collaboration socket closed".into()))
+}
 
-    doc.transact_mut()
-        .apply_update(incoming)
-        .map_err(|error| AppError::BadRequest(format!("Apply Yjs update failed: {error}")))?;
+fn decode_update_frame(frame: &[u8]) -> Result<(Uuid, &[u8]), AppError> {
+    if frame.len() < 20 || &frame[..4] != UPDATE_MAGIC {
+        return Err(AppError::BadRequest(
+            "Unsupported collaboration frame".into(),
+        ));
+    }
+    let update_id = Uuid::from_slice(&frame[4..20])
+        .map_err(|_| AppError::BadRequest("Invalid update identifier".into()))?;
+    Ok((update_id, &frame[20..]))
+}
 
-    let compacted = doc
-        .transact()
-        .encode_state_as_update_v1(&StateVector::default());
-    Ok(Some(compacted))
+fn json_message(value: serde_json::Value) -> Message {
+    Message::Text(value.to_string().into())
 }
