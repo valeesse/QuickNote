@@ -29,7 +29,10 @@ export function useClipboard() {
     capturingRef.current = true;
     try {
       const item = await invoke<ClipboardItem | null>("capture_clipboard");
-      if (item) await loadItems();
+      if (item) {
+        await loadItems();
+        requestSync();
+      }
       if (!silent) setError(null);
       return item;
     } catch (err) {
@@ -51,17 +54,20 @@ export function useClipboard() {
   const togglePin = useCallback(async (id: string) => {
     await invoke("toggle_clipboard_pin", { id });
     await loadItems();
+    requestSync();
   }, [loadItems]);
 
   const deleteItem = useCallback(async (id: string) => {
     await invoke("delete_clipboard_item", { id });
     await loadItems();
+    requestSync();
   }, [loadItems]);
 
   const clearClipboard = useCallback(async () => {
     const count = await invoke<number>("clear_clipboard");
     await invoke<boolean>("prime_clipboard_capture");
     await loadItems();
+    if (count > 0) requestSync();
     return count;
   }, [loadItems]);
 
@@ -91,7 +97,10 @@ export function useClipboard() {
     let disposed = false;
     void import("@tauri-apps/api/event")
       .then(async ({ listen }) => {
-        const stop = await listen<ClipboardItem>("clipboard-captured", () => void loadItems());
+        const stop = await listen<ClipboardItem>("clipboard-captured", () => {
+          void loadItems();
+          requestSync();
+        });
         if (disposed) stop();
         else unlisten = stop;
       })
@@ -136,4 +145,8 @@ export function useClipboard() {
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function requestSync() {
+  window.dispatchEvent(new Event("quicknote:sync-needed"));
 }

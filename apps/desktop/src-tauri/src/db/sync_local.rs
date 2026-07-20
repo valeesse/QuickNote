@@ -37,6 +37,16 @@ impl Database {
         .optional()
     }
 
+    pub fn list_attachments_for_sync(&self) -> Result<Vec<AttachmentRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt =
+            conn.prepare("SELECT id, relative_path, mime_type, size, created_at FROM attachments")?;
+        let records = stmt
+            .query_map([], attachment_from_row)?
+            .collect::<Result<Vec<_>>>()?;
+        Ok(records)
+    }
+
     pub fn list_pending_changes(&self, limit: i64) -> Result<Vec<SyncChange>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
@@ -124,6 +134,31 @@ impl Database {
             "INSERT INTO sync_cursors(provider, device_id, cursor) VALUES(?1, ?2, ?3)
              ON CONFLICT(provider, device_id) DO UPDATE SET cursor = excluded.cursor",
             params![provider, device_id, cursor.to_string()],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_sync_cursor_value(&self, provider: &str, device_id: &str) -> Result<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT cursor FROM sync_cursors WHERE provider = ?1 AND device_id = ?2",
+            params![provider, device_id],
+            |row| row.get(0),
+        )
+        .optional()
+    }
+
+    pub fn set_sync_cursor_value(
+        &self,
+        provider: &str,
+        device_id: &str,
+        cursor: &str,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO sync_cursors(provider, device_id, cursor) VALUES(?1, ?2, ?3)
+             ON CONFLICT(provider, device_id) DO UPDATE SET cursor = excluded.cursor",
+            params![provider, device_id, cursor],
         )?;
         Ok(())
     }

@@ -221,8 +221,8 @@ impl SyncService {
         db.ensure_sync_bootstrap(&format!("{}:{}", config.provider, config.endpoint))
             .map_err(|e| e.to_string())?;
 
-        let pulled_conflicts = pull_state(&provider, db, attachments_dir, config).await?;
         let pushed = push_state(&provider, db, attachments_dir, config).await?;
+        let pulled_conflicts = pull_state(&provider, db, attachments_dir, config).await?;
         Ok((pushed, pulled_conflicts))
     }
 

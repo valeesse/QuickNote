@@ -15,20 +15,37 @@ pub(super) async fn pull_state(
         if device_id == &config.device_id || !is_safe_path_segment(device_id) {
             continue;
         }
+        let revision = provider
+            .get(&revision_file_path(device_id))
+            .await?
+            .and_then(|body| String::from_utf8(body).ok());
+        let cursor_scope = format!("webdav:{}", config.endpoint);
+        let local_attachments_available = db
+            .list_attachments_for_sync()
+            .map_err(|e| e.to_string())?
+            .iter()
+            .all(|record| attachments_dir.join(&record.relative_path).exists());
+        if local_attachments_available
+            && revision.as_ref().is_some_and(|value| {
+                db.get_sync_cursor_value(&cursor_scope, device_id)
+                    .ok()
+                    .flatten()
+                    .as_ref()
+                    == Some(value)
+            })
+        {
+            continue;
+        }
         // List entity types under state/{device_id}/
-        let entity_types = provider
-            .list(&format!("state/{device_id}"))
-            .await
-            .unwrap_or_default();
+        let entity_types = provider.list(&format!("state/{device_id}")).await?;
         for entity_type in &entity_types {
-            if !is_safe_path_segment(entity_type) {
+            if entity_type == "meta" || !is_safe_path_segment(entity_type) {
                 continue;
             }
             // List entity files under state/{device_id}/{entity_type}/
             let files = provider
                 .list(&format!("state/{device_id}/{entity_type}"))
-                .await
-                .unwrap_or_default();
+                .await?;
             for file in &files {
                 let Some(entity_id) = file.strip_suffix(".json") else {
                     continue;
@@ -86,6 +103,10 @@ pub(super) async fn pull_state(
                     conflicts += 1;
                 }
             }
+        }
+        if let Some(revision) = revision {
+            db.set_sync_cursor_value(&cursor_scope, device_id, &revision)
+                .map_err(|e| e.to_string())?;
         }
     }
     Ok((pulled, conflicts))

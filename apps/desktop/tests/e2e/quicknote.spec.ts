@@ -58,6 +58,31 @@ test("flushes the current draft before switching notes", async ({ page }) => {
   await expect(noteItem(page, "第二条便签")).toBeVisible();
 });
 
+test("switches repeatedly between existing notes", async ({ page }) => {
+  await page.evaluate(() => {
+    const now = new Date().toISOString();
+    localStorage.setItem("quicknote-e2e-db", JSON.stringify(
+      ["第一条", "第二条", "第三条"].map((title, index) => ({
+        id: `note-${index + 1}`,
+        title,
+        content: `<p>${title}</p>`,
+        is_pinned: false,
+        created_at: now,
+        updated_at: now,
+        version: 1,
+        is_deleted: false,
+        tags: [],
+      })),
+    ));
+  });
+  await page.reload();
+
+  for (const title of ["第一条", "第二条", "第三条", "第一条"]) {
+    await noteItem(page, title).click();
+    await expect(page.locator(".tiptap")).toContainText(title);
+  }
+});
+
 test("switches from search results to a tag filter", async ({ page }) => {
   await page.evaluate(() => {
     const now = new Date().toISOString();

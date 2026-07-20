@@ -202,6 +202,7 @@ export default function App() {
           <Suspense fallback={<EditorSkeleton showStatusBar />}>
           {activeNote ? (
                 <NoteEditor
+                  key={activeNote.id}
                   note={activeNote}
               onUpdate={updateNote}
               onSaveAttachment={saveAttachment}

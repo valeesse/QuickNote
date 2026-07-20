@@ -210,6 +210,7 @@ export function MainApp({ userEmail, onLogout }: { userEmail: string; onLogout: 
             <Suspense fallback={<EditorSkeleton showStatusBar />}>
               {activeNote ? (
                 <NoteEditor
+                  key={activeNote.id}
                   note={activeNote}
                   onUpdate={updateNote}
                   saveStatus={saveStatus}

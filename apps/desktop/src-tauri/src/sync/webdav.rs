@@ -118,6 +118,8 @@ impl SyncProvider for WebDavProvider {
             .await?;
         self.create_collection(&format!("state/{device_id}/note_tag"))
             .await?;
+        self.create_collection(&format!("state/{device_id}/meta"))
+            .await?;
         self.create_collection("heads").await?;
         self.create_collection("heads/notes").await?;
         self.create_collection("yjs").await?;

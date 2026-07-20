@@ -117,10 +117,18 @@ export function useSync({
   useEffect(() => {
     const timer = setInterval(() => void syncIfNeeded(), 60_000);
     const onFocus = () => void syncIfNeeded();
+    let requestedSyncTimer: ReturnType<typeof setTimeout> | null = null;
+    const onSyncNeeded = () => {
+      if (requestedSyncTimer) clearTimeout(requestedSyncTimer);
+      requestedSyncTimer = setTimeout(() => void syncIfNeeded(), 750);
+    };
     window.addEventListener("focus", onFocus);
+    window.addEventListener("quicknote:sync-needed", onSyncNeeded);
     return () => {
       clearInterval(timer);
+      if (requestedSyncTimer) clearTimeout(requestedSyncTimer);
       window.removeEventListener("focus", onFocus);
+      window.removeEventListener("quicknote:sync-needed", onSyncNeeded);
     };
   }, [syncIfNeeded]);
 

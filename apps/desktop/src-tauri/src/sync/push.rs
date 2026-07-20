@@ -4,46 +4,65 @@ pub(super) fn state_file_path(device_id: &str, entity_type: &str, entity_id: &st
     format!("state/{device_id}/{entity_type}/{entity_id}.json")
 }
 
+pub(super) fn revision_file_path(device_id: &str) -> String {
+    format!("state/{device_id}/meta/revision")
+}
+
 pub(super) async fn push_state(
     provider: &dyn SyncProvider,
     db: &Database,
     attachments_dir: &Path,
     config: &SyncConfig,
 ) -> Result<usize, String> {
-    let changes = db.list_pending_changes(500).map_err(|e| e.to_string())?;
+    let mut pushed = 0;
+    loop {
+        let changes = db.list_pending_changes(500).map_err(|e| e.to_string())?;
+        if changes.is_empty() {
+            break;
+        }
 
-    // Deduplicate: collect unique (entity_type, entity_id) pairs
-    let mut seen = std::collections::HashSet::new();
-    let mut entities: Vec<(String, String)> = Vec::new();
-    for change in &changes {
-        let key = (change.entity_type.clone(), change.entity_id.clone());
-        if seen.insert(key.clone()) {
-            entities.push(key);
+        let mut seen = std::collections::HashSet::new();
+        let mut entities: Vec<(String, String)> = Vec::new();
+        for change in &changes {
+            let key = (change.entity_type.clone(), change.entity_id.clone());
+            if seen.insert(key.clone()) {
+                entities.push(key);
+            }
+        }
+
+        for (entity_type, entity_id) in &entities {
+            let envelope = build_state_envelope(db, entity_type, entity_id, &config.device_id)?;
+
+            if let Some(attachment) = &envelope.attachment {
+                let bytes = std::fs::read(attachments_dir.join(&attachment.relative_path))
+                    .map_err(|e| format!("Failed to read attachment {}: {e}", attachment.id))?;
+                provider
+                    .put(
+                        &format!("attachments/{}", attachment.id),
+                        bytes,
+                        &attachment.mime_type,
+                    )
+                    .await?;
+            }
+
+            let body = serde_json::to_vec(&envelope).map_err(|e| e.to_string())?;
+            let path = state_file_path(&config.device_id, entity_type, entity_id);
+            provider.put(&path, body, "application/json").await?;
+            db.mark_entity_changes_synced(entity_type, entity_id)
+                .map_err(|e| e.to_string())?;
+            pushed += 1;
         }
     }
 
-    let mut pushed = 0;
-    for (entity_type, entity_id) in &entities {
-        let envelope = build_state_envelope(db, entity_type, entity_id, &config.device_id)?;
-
-        if let Some(attachment) = &envelope.attachment {
-            let bytes = std::fs::read(attachments_dir.join(&attachment.relative_path))
-                .map_err(|e| format!("Failed to read attachment {}: {e}", attachment.id))?;
-            provider
-                .put(
-                    &format!("attachments/{}", attachment.id),
-                    bytes,
-                    &attachment.mime_type,
-                )
-                .await?;
-        }
-
-        let body = serde_json::to_vec(&envelope).map_err(|e| e.to_string())?;
-        let path = state_file_path(&config.device_id, entity_type, entity_id);
-        provider.put(&path, body, "application/json").await?;
-        db.mark_entity_changes_synced(entity_type, entity_id)
-            .map_err(|e| e.to_string())?;
-        pushed += 1;
+    let revision_path = revision_file_path(&config.device_id);
+    if pushed > 0 || provider.get(&revision_path).await?.is_none() {
+        provider
+            .put(
+                &revision_path,
+                uuid::Uuid::new_v4().to_string().into_bytes(),
+                "text/plain",
+            )
+            .await?;
     }
     Ok(pushed)
 }

@@ -27,6 +27,7 @@ async fn prepare_creates_yjs_head_and_update_collections() {
         "/state/device-a/attachment",
         "/state/device-a/tag",
         "/state/device-a/note_tag",
+        "/state/device-a/meta",
         "/heads",
         "/heads/notes",
         "/yjs",
@@ -59,8 +60,7 @@ async fn list_accepts_webdav_207_multistatus() {
         .mount(&server)
         .await;
 
-    let provider =
-        WebDavProvider::new(&format!("{}/root", server.uri()), "user", "pass").unwrap();
+    let provider = WebDavProvider::new(&format!("{}/root", server.uri()), "user", "pass").unwrap();
     assert_eq!(provider.list("changes").await.unwrap(), vec!["device-a"]);
 }
 
@@ -84,8 +84,7 @@ async fn immutable_put_accepts_identical_precondition_retry() {
         .mount(&server)
         .await;
 
-    let provider =
-        WebDavProvider::new(&format!("{}/root", server.uri()), "user", "pass").unwrap();
+    let provider = WebDavProvider::new(&format!("{}/root", server.uri()), "user", "pass").unwrap();
     provider
         .put("attachments/abc123", body, "application/octet-stream")
         .await
@@ -117,8 +116,8 @@ async fn slow_webdav_response_times_out() {
 #[tokio::test]
 #[ignore = "set QUICKNOTE_WEBDAV_TEST_URL to run against a live WebDAV server"]
 async fn live_webdav_smoke_test() {
-    let endpoint = std::env::var("QUICKNOTE_WEBDAV_TEST_URL")
-        .expect("QUICKNOTE_WEBDAV_TEST_URL is required");
+    let endpoint =
+        std::env::var("QUICKNOTE_WEBDAV_TEST_URL").expect("QUICKNOTE_WEBDAV_TEST_URL is required");
     let username = std::env::var("QUICKNOTE_WEBDAV_TEST_USERNAME").unwrap_or_default();
     let password = std::env::var("QUICKNOTE_WEBDAV_TEST_PASSWORD").unwrap_or_default();
     let device_id = format!("smoke-{}", uuid::Uuid::new_v4());

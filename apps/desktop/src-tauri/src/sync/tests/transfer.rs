@@ -27,6 +27,35 @@ async fn clipboard_item_round_trips_between_devices() {
         db_b.get_clipboard_item(&item.id).unwrap().unwrap().content,
         item.content
     );
+
+    provider.objects.lock().unwrap().insert(
+        state_file_path("device-a", "clipboard", &item.id),
+        b"invalid state that must not be fetched again".to_vec(),
+    );
+    assert_eq!(
+        pull_state(&provider, &db_b, dir_b.path(), &config("device-b"))
+            .await
+            .unwrap(),
+        (0, 0)
+    );
+}
+
+#[tokio::test]
+async fn one_push_drains_more_than_one_pending_change_batch() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::new(dir.path().to_path_buf()).unwrap();
+    for index in 0..501 {
+        db.create_note(&format!("<p>{index}</p>")).unwrap();
+    }
+    let provider = MemoryProvider::default();
+
+    assert_eq!(
+        push_state(&provider, &db, dir.path(), &config("device-a"))
+            .await
+            .unwrap(),
+        501
+    );
+    assert!(db.list_pending_changes(1).unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -60,7 +89,7 @@ async fn multiple_edits_produce_single_state_file() {
         .lock()
         .unwrap()
         .keys()
-        .filter(|k| k.starts_with("state/"))
+        .filter(|k| k.starts_with("state/") && !k.contains("/meta/"))
         .cloned()
         .collect();
     assert_eq!(state_files.len(), 1);

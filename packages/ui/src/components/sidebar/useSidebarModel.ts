@@ -34,11 +34,11 @@ export function useSidebarModel(props: SidebarProps) {
   const pinnedNotes = useMemo(() => notes.filter((note) => note.is_pinned), [notes]);
   const unpinnedNotes = useMemo(() => notes.filter((note) => !note.is_pinned), [notes]);
   const pinnedClipboardItems = useMemo(
-    () => clipboardItems.filter((item) => item.is_pinned).slice(0, 4),
+    () => clipboardItems.filter((item) => item.is_pinned),
     [clipboardItems],
   );
   const recentClipboardItems = useMemo(
-    () => clipboardItems.filter((item) => !item.is_pinned).slice(0, 8),
+    () => clipboardItems.filter((item) => !item.is_pinned),
     [clipboardItems],
   );
 
