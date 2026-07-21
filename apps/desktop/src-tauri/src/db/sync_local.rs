@@ -37,6 +37,7 @@ impl Database {
         .optional()
     }
 
+    #[cfg(test)]
     pub fn list_attachments_for_sync(&self) -> Result<Vec<AttachmentRecord>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt =
@@ -65,6 +66,15 @@ impl Database {
             })?
             .collect::<Result<Vec<_>>>()?;
         Ok(changes)
+    }
+
+    pub fn pending_sync_change_count(&self) -> Result<i64> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT COUNT(*) FROM sync_changes WHERE synced = 0",
+            [],
+            |row| row.get(0),
+        )
     }
 
     pub fn ensure_sync_bootstrap(&self, scope: &str) -> Result<()> {
@@ -112,6 +122,13 @@ impl Database {
             params![seq],
         )?;
         Ok(())
+    }
+
+    /// Synced outbox rows are acknowledgements, not history. Keeping them forever makes the
+    /// local database grow with edit count even after WebDAV has committed the current state.
+    pub fn prune_synced_changes(&self) -> Result<usize> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM sync_changes WHERE synced = 1", [])
     }
 
     #[allow(dead_code)]
@@ -182,6 +199,7 @@ impl Database {
     }
 
     /// Read the current causal version for an entity without incrementing or marking dirty.
+    #[cfg(test)]
     pub fn get_entity_causal_version(
         &self,
         entity_type: &str,
@@ -209,6 +227,7 @@ impl Database {
     }
 
     /// Mark all pending changes for a specific entity as synced.
+    #[allow(dead_code)]
     pub fn mark_entity_changes_synced(&self, entity_type: &str, entity_id: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(

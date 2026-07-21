@@ -13,12 +13,12 @@
 - 数据库正文只保存 `attachment://{sha256}`。
 - TipTap 显示时把逻辑 ID 解析为当前设备的 asset URL。
 - 附件表保存 SHA-256 ID、相对路径、MIME、大小和创建时间。
-- WebDAV 使用 `attachments/{sha256}`，相同内容天然去重。
+- WebDAV v4 对小附件使用 `v4/attachments/{prefix}/{sha256}.bin`；超过 4 MiB 时写入 `v4/attachment-manifests/` 和 1 MiB 内容寻址块 `v4/attachment-chunks/`，支持幂等重试并对相同块去重。
 - 清理时同时扫描当前便签和历史版本，避免删除仍被历史引用的文件。
 
 ## 同步协议
 
-本地 `sync_changes` 是 provider-neutral outbox。远端 change envelope 包含：
+本地 `sync_changes` 是 provider-neutral outbox，成功提交后立即裁剪已确认行。远端实体对象包含：
 
 - `schema_version`
 - `device_id`
@@ -27,21 +27,33 @@
 - `causal_version`：按设备计数的版本向量与确定性来源设备
 - 当前便签、附件或剪贴板条目元数据
 
-schema v2 使用版本向量判断 `dominates / dominated / concurrent`，`changed_at` 和
+schema v2 envelope 使用版本向量判断 `dominates / dominated / concurrent`，`changed_at` 和
 `updated_at` 仅用于展示与列表排序。并发版本以来源设备 ID 和规范化计数器做稳定
-tie-break；失败一方生成内容寻址的冲突副本。旧 schema v1 change 会转换为
-`{ device_id: sequence }` 的单设备向量，因此无需重写已有远端目录。
+tie-break；失败一方生成内容寻址的冲突副本。并发 Yjs 合并结果会作为新的本地变更再次
+发布，确保所有设备最终观察到同一个 joined causal frontier。
 
-WebDAV provider 使用不可变路径：
+WebDAV 生产路径为破坏性 v4，不读取或写入旧 `state/changes/device-heads`。v4 使用内容寻址
+Merkle 状态：
+
+- `v4/workspace.json`：固定协议、workspace ID 和 epoch。
+- `v4/heads/{device_id}.json`：每个设备独占写入的提交指针。
+- `v4/roots/{prefix}/{hash}.json.gz`：指向256个实体 shard 的不可变 root。
+- `v4/shards/{prefix}/{hash}.json.gz`：实体 key 到当前对象 hash 的索引。
+- `v4/objects/{prefix}/{hash}.json.gz`：完整当前实体；Yjs 二进制使用 Base64 而非 JSON 数字数组。
+- `v4/attachments/{prefix}/{sha256}.bin`：小型内容寻址附件。
+- `v4/attachment-manifests/` 与 `v4/attachment-chunks/`：大附件清单和 1 MiB 内容寻址块。
+- `v4/gc/candidates/`：两阶段垃圾回收标记。
 
 ```text
-changes/{device-id}/{sequence}.json
-attachments/{sha256}
+head -> root -> shard -> entity object -> attachment
 ```
 
-同步先拉取再推送。这样本地未同步修改仍可参与冲突判断。远端较新且本地有未同步内容时，先生成“冲突副本”，再应用远端版本，禁止静默覆盖。
+同步按“推送本地、拉取远端、发布合并结果”执行。本地未同步修改参与因果冲突判断；
+远端较新且本地有并发内容时保留确定性冲突副本，禁止静默覆盖。
 
-首次连接某个 provider endpoint 时执行 bootstrap，把已有便签、附件与剪贴板条目加入 outbox。每个远端设备使用独立 cursor，成功应用 change 后才推进 cursor。
+首次连接 v4 workspace 时执行 bootstrap。新设备只需读取当前 heads/roots，不需要任何历史
+generation。未被当前 head 引用的对象先标记，至少7天后再次确认仍不可达才删除；上传中断
+产生的孤儿不会被当场误删。自动 GC 每24小时最多运行一次，设置页也可手动触发安全扫描。
 
 ## CouchDB 扩展
 
@@ -62,12 +74,12 @@ attachments/{sha256}
 | 切换、删除、隐藏、关闭、同步前 flush | 已完成 | 保存失败会中止切换/删除/同步；Tauri 关闭请求会被阻止。 |
 | 正文、版本快照、outbox 原子提交 | 已完成 | SQLite 事务覆盖创建、编辑、删除、恢复、固定和版本恢复。 |
 | 内容寻址附件 | 已完成 | 使用 SHA-256 ID；同步拉取会校验路径、大小和内容哈希后原子落盘。 |
-| WebDAV 增量同步 | 已完成 | pull 后 push、endpoint 隔离 cursor、首次 bootstrap、不可变 change 路径与幂等重试。 |
+| WebDAV 有界同步 | 已完成 | v4 内容寻址 root/shard、endpoint/workspace/epoch 隔离 cursor、首次 bootstrap、gzip、幂等提交。 |
 | 冲突副本 | 已完成 | 远端更新/删除遇到本地未推送内容时保留本地冲突副本。 |
 | 同步编辑边界与 UI 一致性 | 已完成 | 同步期间锁定编辑；完成后同时刷新列表与当前编辑器，远端删除会关闭当前便签。 |
 | 协议与并发防护 | 已完成 | 校验 schema/device/sequence/entity，后端串行化同步任务。 |
 | 崩溃级 draft 恢复 | 已完成 | 未落盘正文同步写入版本化 localStorage journal；启动后重建串行队列，成功落盘才清理。 |
-| WebDAV 兼容与故障注入 | 已完成 | 覆盖真实 HTTP live smoke、207/命名空间/编码 href、幂等 PUT、确认丢失、超时、损坏 change 与附件校验。 |
+| WebDAV 兼容与故障注入 | 已完成 | 覆盖真实 HTTP v4 E2E、207/命名空间/编码 href、head 确认丢失、超时、对象 hash 与附件校验。 |
 | 无墙钟冲突排序 | 已完成 | schema v2 使用版本向量和确定性 tie-break；±百年时间戳及编辑/删除并发测试均收敛。 |
 | 跨平台剪贴板同步 | 已完成 | 文本、链接和代码片段使用内容寻址去重，复用 outbox/版本向量；桌面前台采集，移动端主动读取。 |
 

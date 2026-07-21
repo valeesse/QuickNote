@@ -58,6 +58,7 @@ function ReadyNoteEditor({ props, yjs }: { props: SharedNoteEditorProps; yjs: Yj
     [resolveImageSrc],
   );
   const importedContentRef = useRef("");
+  const loadedNoteIdRef = useRef<string | null>(null);
   const handleUpdate = useCallback((id: string, html: string) => {
     const content = serializeContent(html);
     importedContentRef.current = content;
@@ -100,22 +101,34 @@ function ReadyNoteEditor({ props, yjs }: { props: SharedNoteEditorProps; yjs: Yj
       Collaboration.configure({ document: yjs.doc, field: "prosemirror" }),
     ],
     content: "",
-    onUpdate: ({ editor: activeEditor }) => bridge.handleEditorUpdate(activeEditor),
+    onUpdate: ({ editor: activeEditor }) => {
+      if (loadedNoteIdRef.current !== note.id) return;
+      bridge.handleEditorUpdate(activeEditor);
+    },
     editorProps: bridge.editorProps,
   });
 
   useEffect(() => bridge.setEditor(editor), [bridge.setEditor, editor]);
   useEffect(() => {
-    if (!editor || !yjs.isReady || !yjs.shouldBootstrap || !note.content) return;
+    if (!editor || !yjs.isReady) return;
+    if (!yjs.shouldBootstrap || !note.content) {
+      loadedNoteIdRef.current = note.id;
+      return;
+    }
+    loadedNoteIdRef.current = null;
     const isLegacyRefresh = !note.yjs_state?.length && importedContentRef.current !== note.content;
-    if (!editor.isEmpty && !isLegacyRefresh) return;
+    if (!editor.isEmpty && !isLegacyRefresh) {
+      loadedNoteIdRef.current = note.id;
+      return;
+    }
     let cancelled = false;
     void (async () => shouldMigrateContent?.(note) && migrateContent
       ? migrateContent(note.content)
       : note.content)().then((content: string) => {
       if (!cancelled && !editor.isDestroyed) {
         importedContentRef.current = note.content;
-        editor.commands.setContent(content);
+        editor.commands.setContent(content, { emitUpdate: false });
+        loadedNoteIdRef.current = note.id;
       }
     });
     return () => { cancelled = true; };

@@ -2,7 +2,7 @@ use super::*;
 
 #[tauri::command]
 pub fn save_attachment(
-    db: State<'_, Arc<Database>>,
+    db: State<'_, DatabaseState>,
     paths: State<'_, Arc<AppPaths>>,
     data_url: String,
     filename: String,
@@ -41,7 +41,7 @@ pub fn save_attachment(
 
 #[tauri::command]
 pub fn get_attachment(
-    db: State<'_, Arc<Database>>,
+    db: State<'_, DatabaseState>,
     paths: State<'_, Arc<AppPaths>>,
     id: String,
 ) -> Result<Attachment, String> {
@@ -61,7 +61,7 @@ pub fn get_attachment(
 
 #[tauri::command]
 pub fn get_attachment_data_url(
-    db: State<'_, Arc<Database>>,
+    db: State<'_, DatabaseState>,
     paths: State<'_, Arc<AppPaths>>,
     id: String,
 ) -> Result<AttachmentDataUrl, String> {
@@ -89,7 +89,7 @@ pub fn get_attachment_data_url(
 
 #[tauri::command]
 pub fn cleanup_attachments(
-    db: State<'_, Arc<Database>>,
+    db: State<'_, DatabaseState>,
     paths: State<'_, Arc<AppPaths>>,
 ) -> Result<usize, String> {
     let orphans = db.orphan_attachments().map_err(|e| e.to_string())?;

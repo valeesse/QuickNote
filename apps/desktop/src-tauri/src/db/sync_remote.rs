@@ -55,6 +55,15 @@ impl Database {
                                 &merged_version,
                                 false,
                             )?;
+                            // A concurrent merge is a new converged state. Publish it from this
+                            // device so every peer can observe the joined causal frontier.
+                            enqueue_change(
+                                &tx,
+                                "note",
+                                &remote.id,
+                                "upsert",
+                                &merged_note.updated_at,
+                            )?;
                             tx.commit()?;
                             return Ok((true, false));
                         }
@@ -219,8 +228,14 @@ impl Database {
     }
 
     pub fn remove_attachment_record(&self, id: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute("DELETE FROM attachments WHERE id = ?1", params![id])?;
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let removed = tx.execute("DELETE FROM attachments WHERE id = ?1", params![id])?;
+        if removed > 0 {
+            let now = Utc::now().to_rfc3339();
+            enqueue_change(&tx, "attachment", id, "delete", &now)?;
+        }
+        tx.commit()?;
         Ok(())
     }
 }

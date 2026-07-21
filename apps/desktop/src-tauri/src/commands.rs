@@ -1,5 +1,9 @@
-use crate::db::{ClipboardItem, Database, Note, NoteSummary, NoteVersion, TagSummary};
-use crate::sync::{SyncConfig, SyncConfigInput, SyncReport, SyncService};
+use crate::db::{
+    ClipboardItem, Database, DatabaseState, Note, NoteSummary, NoteVersion, TagSummary,
+};
+use crate::sync::{
+    SyncConfig, SyncConfigInput, SyncReport, SyncService, WebDavGcReport, WebDavStorageStatus,
+};
 use base64::{engine::general_purpose, Engine as _};
 use image::{codecs::png::PngEncoder, ColorType, ImageEncoder};
 use serde::Serialize;
@@ -27,6 +31,7 @@ pub struct AppPaths {
 #[derive(Clone, Default)]
 pub struct ClipboardCaptureState {
     fingerprint: Arc<Mutex<Option<String>>>,
+    accept_next_duplicate: Arc<AtomicBool>,
     enabled: Arc<AtomicBool>,
     initialized: Arc<AtomicBool>,
     suppress_events: Arc<AtomicBool>,

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { X, RotateCcw, Pin, PinOff, Trash2, Eraser, Cloud, Server, Keyboard, Save, RefreshCw } from "lucide-react";
-import type { ShortcutConfig, ShortcutConfigInput, SyncConfig, SyncConfigInput, SyncStatus } from "@/types";
+import type { ShortcutConfig, ShortcutConfigInput, SyncConfig, SyncConfigInput, SyncStatus, WebDavGcReport, WebDavStorageStatus } from "@/types";
 import { ShortcutCaptureInput } from "./ShortcutCaptureInput";
 
 type SyncSettingsPanelProps = {
@@ -10,12 +10,14 @@ type SyncSettingsPanelProps = {
   onSync: () => Promise<boolean>;
   onTestWebdav: (endpoint: string, username: string, password: string) => Promise<void>;
   onTestCloud: (cloudUrl: string, cloudEmail: string, cloudPassword: string) => Promise<void>;
+  onGetWebdavStorageStatus: () => Promise<WebDavStorageStatus>;
+  onRunWebdavGc: () => Promise<WebDavGcReport>;
   onSaveShortcuts: (input: ShortcutConfigInput) => Promise<ShortcutConfig>;
 };
 
 export function SyncSettingsPanel({
   config, status, error, shortcutConfig, shortcutError, onClose, onSave,
-  onSync, onTestWebdav, onTestCloud, onSaveShortcuts,
+  onSync, onTestWebdav, onTestCloud, onGetWebdavStorageStatus, onRunWebdavGc, onSaveShortcuts,
 }: SyncSettingsPanelProps) {
   const [enabled, setEnabled] = useState(config?.enabled ?? false);
   const [endpoint, setEndpoint] = useState(config?.endpoint ?? "");
@@ -34,6 +36,8 @@ export function SyncSettingsPanel({
   const [cloudMsg, setCloudMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [savingShortcuts, setSavingShortcuts] = useState(false);
   const [shortcutsMsg, setShortcutsMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [storage, setStorage] = useState<WebDavStorageStatus | null>(null);
+  const [runningGc, setRunningGc] = useState(false);
 
   useEffect(() => {
     if (!config) return;
@@ -51,6 +55,36 @@ export function SyncSettingsPanel({
     setClipboardShortcut(shortcutConfig.clipboard_history);
     setAlternateShortcut(shortcutConfig.quick_note_alternate);
   }, [shortcutConfig]);
+
+  useEffect(() => {
+    if (!config?.enabled) {
+      setStorage(null);
+      return;
+    }
+    let cancelled = false;
+    void onGetWebdavStorageStatus()
+      .then((value) => { if (!cancelled) setStorage(value); })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [config?.enabled, config?.endpoint, onGetWebdavStorageStatus]);
+
+  const runGc = async () => {
+    setRunningGc(true);
+    try {
+      const report = await onRunWebdavGc();
+      setStorage(report.status);
+      setWebdavMsg({
+        ok: true,
+        text: report.deleted_objects > 0
+          ? `已安全回收 ${report.deleted_objects} 个远端对象`
+          : "扫描完成；新孤儿会进入7天安全观察期",
+      });
+    } catch (err) {
+      setWebdavMsg({ ok: false, text: `垃圾回收失败：${err instanceof Error ? err.message : String(err)}` });
+    } finally {
+      setRunningGc(false);
+    }
+  };
 
   const saveWebdav = async () => {
     setSavingWebdav(true);
@@ -193,6 +227,21 @@ export function SyncSettingsPanel({
                 <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder={config?.enabled ? "留空则保持不变" : "WebDAV 应用密码"} className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm outline-none transition focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-50" />
               </label>
               {webdavMsg && <p className={`rounded-lg px-3 py-2 text-xs border ${webdavMsg.ok ? "bg-green-50 text-green-700 border-green-100" : "bg-red-50 text-red-700 border-red-100"}`}>{webdavMsg.text}</p>}
+              {storage && (
+                <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-xs leading-5 text-gray-500">
+                  <div className="flex justify-between"><span>远端协议</span><span>v{storage.protocol_version} / epoch {storage.epoch}</span></div>
+                  <div className="flex justify-between"><span>设备</span><span>{storage.devices}</span></div>
+                  <div className="flex justify-between"><span>对象</span><span>{storage.reachable_objects} 有效 / {storage.stored_objects} 总计</span></div>
+                  <div className="flex justify-between"><span>待回收</span><span>{storage.pending_gc_objects}</span></div>
+                  <div className="flex justify-between"><span>占用</span><span>{formatBytes(storage.stored_bytes)}</span></div>
+                </div>
+              )}
+              {config?.enabled && (
+                <button type="button" onClick={() => void runGc()} disabled={runningGc} className="flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-50">
+                  <Eraser className="h-3.5 w-3.5" />
+                  {runningGc ? "扫描中" : "安全回收远端垃圾"}
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => void saveWebdav()}
@@ -295,4 +344,10 @@ export function SyncSettingsPanel({
       </div>
     </div>
   );
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
 }

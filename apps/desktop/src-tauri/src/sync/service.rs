@@ -140,7 +140,44 @@ impl SyncService {
             db.ensure_sync_bootstrap(&cloud_bootstrap_scope(&config))
                 .map_err(|e| e.to_string())?;
 
-            // Pull from cloud
+            // Upload every local batch before pulling so weak downstream bandwidth cannot
+            // indefinitely delay publishing this device's changes.
+            loop {
+                let changes = db.list_pending_changes(500).map_err(|e| e.to_string())?;
+                if changes.is_empty() {
+                    break;
+                }
+                let mut cloud_envelopes = Vec::with_capacity(changes.len());
+                for change in &changes {
+                    let envelope = build_envelope(db, change, &config.device_id)?;
+                    if let Some(attachment) = &envelope.attachment {
+                        let bytes = std::fs::read(attachments_dir.join(&attachment.relative_path))
+                            .map_err(|error| {
+                                format!("Failed to read attachment {}: {error}", attachment.id)
+                            })?;
+                        cloud
+                            .put(
+                                &format!("attachments/{}", attachment.id),
+                                bytes,
+                                &attachment.mime_type,
+                            )
+                            .await?;
+                    }
+                    cloud_envelopes.push(envelope);
+                }
+
+                let response = cloud.push(&cloud_envelopes).await?;
+                total_pushed += response.accepted;
+                total_conflicts += response.conflicts;
+                if response.acknowledged_sequences.is_empty() {
+                    return Err("Cloud did not acknowledge the pending sync batch".to_string());
+                }
+                for sequence in response.acknowledged_sequences {
+                    db.mark_change_synced(sequence)
+                        .map_err(|error| error.to_string())?;
+                }
+            }
+
             let (envelopes, server_seq) = cloud.pull(config.cloud_cursor_seq).await?;
             for envelope in &envelopes {
                 let (changed, conflict) =
@@ -155,46 +192,19 @@ impl SyncService {
             }
             config.cloud_cursor_seq = server_seq;
 
-            // Push local changes to cloud
-            let changes = db.list_pending_changes(500).map_err(|e| e.to_string())?;
-            let mut cloud_envelopes = Vec::new();
-            for change in &changes {
-                if let Ok(envelope) = build_envelope(db, change, &config.device_id) {
-                    if let Some(attachment) = &envelope.attachment {
-                        let bytes = std::fs::read(attachments_dir.join(&attachment.relative_path))
-                            .map_err(|error| {
-                                format!("Failed to read attachment {}: {error}", attachment.id)
-                            })?;
-                        cloud
-                            .put(
-                                &format!("attachments/{}", attachment.id),
-                                bytes,
-                                &attachment.mime_type,
-                            )
-                            .await?;
-                        db.mark_change_synced(change.seq)
-                            .map_err(|error| error.to_string())?;
-                        total_pushed += 1;
-                    } else {
-                        cloud_envelopes.push(envelope);
-                    }
-                }
-            }
-            if !cloud_envelopes.is_empty() {
-                let response = cloud.push(&cloud_envelopes).await?;
-                total_pushed += response.accepted;
-                total_conflicts += response.conflicts;
-                for sequence in response.acknowledged_sequences {
-                    db.mark_change_synced(sequence)
-                        .map_err(|error| error.to_string())?;
-                }
-            }
-
             // Save updated cursor
             self.save_config(&config)?;
         } else if config.enabled {
             // WebDAV-only sync (existing logic)
-            let (wp, (pulled, conflicts)) = self.webdav_sync(db, attachments_dir, &config).await?;
+            let (wp, (pulled, conflicts)) = tokio::time::timeout(
+                WEBDAV_SYNC_BUDGET,
+                self.webdav_sync(db, attachments_dir, &config),
+            )
+            .await
+            .map_err(|_| {
+                "WebDAV sync paused after 60 seconds; remaining changes will resume automatically"
+                    .to_string()
+            })??;
             total_pushed = wp;
             total_pulled = pulled;
             total_conflicts = conflicts;
@@ -209,6 +219,53 @@ impl SyncService {
         })
     }
 
+    pub async fn has_remote_changes(&self, db: &Database) -> Result<bool, String> {
+        let _guard = self.sync_lock.lock().await;
+        let mut config = self.get_config()?;
+        if config.cloud_enabled && !config.cloud_url.is_empty() {
+            let cloud_token = self.get_cloud_token(&mut config).await?;
+            self.save_config(&config)?;
+            let cloud = cloud::CloudProvider::new(&config.cloud_url, &cloud_token)?;
+            return cloud.has_changes(config.cloud_cursor_seq).await;
+        }
+        if config.enabled {
+            let password = get_webdav_password(&config)?;
+            let provider = WebDavProvider::new(&config.endpoint, &config.username, &password)?;
+            let workspace = v4::ensure_workspace(&provider, &config.device_id).await?;
+            return v4::has_remote_changes(&provider, db, &config, &workspace).await;
+        }
+        Ok(false)
+    }
+
+    pub async fn webdav_storage_status(&self) -> Result<WebDavStorageStatus, String> {
+        let _guard = self.sync_lock.lock().await;
+        let config = self.get_config()?;
+        if !config.enabled {
+            return Err("WebDAV sync is not enabled".to_string());
+        }
+        let password = get_webdav_password(&config)?;
+        let provider = WebDavProvider::new(&config.endpoint, &config.username, &password)?;
+        let workspace = v4::ensure_workspace(&provider, &config.device_id).await?;
+        v4::storage_status(&provider, &workspace).await
+    }
+
+    pub async fn run_webdav_gc(&self) -> Result<WebDavGcReport, String> {
+        let _guard = self.sync_lock.lock().await;
+        let config = self.get_config()?;
+        if !config.enabled {
+            return Err("WebDAV sync is not enabled".to_string());
+        }
+        let password = get_webdav_password(&config)?;
+        let provider = WebDavProvider::new(&config.endpoint, &config.username, &password)?;
+        let workspace = v4::ensure_workspace(&provider, &config.device_id).await?;
+        let deleted_objects = v4::run_gc(&provider, &workspace, v4::GC_GRACE_SECONDS).await?;
+        let status = v4::storage_status(&provider, &workspace).await?;
+        Ok(WebDavGcReport {
+            deleted_objects,
+            status,
+        })
+    }
+
     async fn webdav_sync(
         &self,
         db: &Database,
@@ -217,12 +274,19 @@ impl SyncService {
     ) -> Result<(usize, (usize, usize)), String> {
         let password = get_webdav_password(config)?;
         let provider = WebDavProvider::new(&config.endpoint, &config.username, &password)?;
-        provider.prepare(&config.device_id).await?;
-        db.ensure_sync_bootstrap(&format!("{}:{}", config.provider, config.endpoint))
-            .map_err(|e| e.to_string())?;
+        let workspace = v4::ensure_workspace(&provider, &config.device_id).await?;
+        db.ensure_sync_bootstrap(&format!(
+            "webdav-v4:{}:{}:{}",
+            config.endpoint, workspace.workspace_id, workspace.epoch
+        ))
+        .map_err(|e| e.to_string())?;
 
-        let pushed = push_state(&provider, db, attachments_dir, config).await?;
-        let pulled_conflicts = pull_state(&provider, db, attachments_dir, config).await?;
+        // Commit local work first, then merge peers, and immediately publish any concurrent
+        // merge result. Production WebDAV no longer reads or writes the append-only v3 tree.
+        let mut pushed = v4::push(&provider, db, attachments_dir, config, &workspace).await?;
+        let pulled_conflicts = v4::pull(&provider, db, attachments_dir, config, &workspace).await?;
+        pushed += v4::push(&provider, db, attachments_dir, config, &workspace).await?;
+        let _ = v4::maybe_run_gc(&provider, db, config, &workspace).await?;
         Ok((pushed, pulled_conflicts))
     }
 
@@ -257,4 +321,58 @@ impl SyncService {
         let password = get_webdav_password(&config)?;
         test_webdav_connection(&config.endpoint, &config.username, &password).await
     }
+}
+
+#[cfg(test)]
+pub(super) async fn webdav_has_remote_changes(
+    provider: &dyn SyncProvider,
+    db: &Database,
+    config: &SyncConfig,
+) -> Result<bool, String> {
+    let batch_cursor_scope = format!("webdav-v3:{}", config.endpoint);
+    let mut batch_devices = std::collections::HashSet::new();
+    for file in provider.list("device-heads").await? {
+        let Some(device_id) = file.strip_suffix(".json") else {
+            continue;
+        };
+        if device_id == config.device_id || !is_safe_path_segment(device_id) {
+            continue;
+        }
+        let Some(head) = read_device_head(provider, device_id).await? else {
+            continue;
+        };
+        batch_devices.insert(device_id.to_string());
+        let cursor = db
+            .get_sync_cursor_value(&batch_cursor_scope, device_id)
+            .map_err(|error| error.to_string())?
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(0);
+        if head.generation > cursor {
+            return Ok(true);
+        }
+    }
+
+    let cursor_scope = format!("webdav:{}", config.endpoint);
+    for device_id in provider.list("state").await? {
+        if device_id == config.device_id
+            || !is_safe_path_segment(&device_id)
+            || batch_devices.contains(&device_id)
+        {
+            continue;
+        }
+        let Some(body) = provider.get(&revision_file_path(&device_id)).await? else {
+            return Ok(true);
+        };
+        let revision = String::from_utf8(body)
+            .map_err(|_| format!("Invalid WebDAV revision for device {device_id}"))?;
+        if db
+            .get_sync_cursor_value(&cursor_scope, &device_id)
+            .map_err(|error| error.to_string())?
+            .as_deref()
+            != Some(revision.as_str())
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }

@@ -9,6 +9,8 @@ export async function installMockBackend(page: Page): Promise<void> {
       id: string;
       title: string;
       content: string;
+      yjs_state?: number[] | null;
+      yjs_state_version?: number;
       is_pinned: boolean;
       created_at: string;
       updated_at: string;
@@ -46,6 +48,8 @@ export async function installMockBackend(page: Page): Promise<void> {
             id: crypto.randomUUID(),
             title: title(args.content || ""),
             content: args.content || "",
+            yjs_state: null,
+            yjs_state_version: 0,
             is_pinned: false,
             created_at: now,
             updated_at: now,
@@ -101,6 +105,10 @@ export async function installMockBackend(page: Page): Promise<void> {
           if (!note) return null;
           note.content = args.content;
           note.title = title(args.content);
+          if (Array.isArray(args.yjsState)) {
+            note.yjs_state = args.yjsState;
+            note.yjs_state_version = (note.yjs_state_version || 0) + 1;
+          }
           note.updated_at = new Date().toISOString();
           note.version += 1;
           save(notes);
@@ -191,12 +199,16 @@ export async function installMockBackend(page: Page): Promise<void> {
           };
         }
         if (cmd === "set_sync_config") return { ...args.config, device_id: "e2e-device" };
-        if (cmd === "has_pending_sync_changes") {
+        if (cmd === "has_pending_sync_changes" || cmd === "has_sync_changes") {
           localStorage.setItem(
             "quicknote-e2e-sync-check-count",
             String(Number(localStorage.getItem("quicknote-e2e-sync-check-count") || 0) + 1),
           );
-          return localStorage.getItem("quicknote-e2e-sync-dirty") === "true";
+          return localStorage.getItem("quicknote-e2e-sync-dirty") === "true"
+            || localStorage.getItem("quicknote-e2e-sync-remote-dirty") === "true";
+        }
+        if (cmd === "pending_sync_change_count") {
+          return localStorage.getItem("quicknote-e2e-sync-dirty") === "true" ? 1 : 0;
         }
         if (cmd === "sync_now") {
           localStorage.setItem(
@@ -214,6 +226,8 @@ export async function installMockBackend(page: Page): Promise<void> {
             note.version += 1;
             save(notes);
           }
+          localStorage.setItem("quicknote-e2e-sync-dirty", "false");
+          localStorage.setItem("quicknote-e2e-sync-remote-dirty", "false");
           return { pushed: 0, pulled: remoteContent && note ? 1 : 0, conflicts: 0 };
         }
         if (cmd.includes("plugin:event|listen")) return 1;

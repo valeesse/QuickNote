@@ -1,4 +1,6 @@
 use super::*;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use wiremock::matchers::{body_bytes, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -16,24 +18,21 @@ fn propfind_parser_accepts_namespaces_absolute_urls_and_encoded_names() {
 }
 
 #[tokio::test]
-async fn prepare_creates_yjs_head_and_update_collections() {
+async fn prepare_creates_v4_content_addressed_collections() {
     let server = MockServer::start().await;
     for collection_path in [
         "/",
-        "/state",
-        "/state/device-a",
-        "/state/device-a/note",
-        "/state/device-a/clipboard",
-        "/state/device-a/attachment",
-        "/state/device-a/tag",
-        "/state/device-a/note_tag",
-        "/state/device-a/meta",
-        "/heads",
-        "/heads/notes",
-        "/yjs",
-        "/yjs/snapshots",
-        "/yjs/updates",
-        "/attachments",
+        "/v4",
+        "/v4/devices",
+        "/v4/heads",
+        "/v4/roots",
+        "/v4/shards",
+        "/v4/objects",
+        "/v4/attachments",
+        "/v4/attachment-manifests",
+        "/v4/attachment-chunks",
+        "/v4/gc",
+        "/v4/gc/candidates",
     ] {
         Mock::given(method("MKCOL"))
             .and(path(collection_path))
@@ -62,6 +61,28 @@ async fn list_accepts_webdav_207_multistatus() {
 
     let provider = WebDavProvider::new(&format!("{}/root", server.uri()), "user", "pass").unwrap();
     assert_eq!(provider.list("changes").await.unwrap(), vec!["device-a"]);
+}
+
+#[tokio::test]
+async fn transient_server_failure_is_retried() {
+    let server = MockServer::start().await;
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let attempts_for_response = attempts.clone();
+    Mock::given(method("PROPFIND"))
+        .and(path("/root/device-heads"))
+        .respond_with(move |_request: &wiremock::Request| {
+            if attempts_for_response.fetch_add(1, Ordering::SeqCst) == 0 {
+                ResponseTemplate::new(503)
+            } else {
+                ResponseTemplate::new(207).set_body_string("<d:multistatus xmlns:d=\"DAV:\"/>")
+            }
+        })
+        .mount(&server)
+        .await;
+
+    let provider = WebDavProvider::new(&format!("{}/root", server.uri()), "user", "pass").unwrap();
+    assert!(provider.list("device-heads").await.unwrap().is_empty());
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
 }
 
 #[tokio::test]
@@ -124,16 +145,17 @@ async fn live_webdav_smoke_test() {
     let provider = WebDavProvider::new(&endpoint, &username, &password).unwrap();
     provider.prepare(&device_id).await.unwrap();
 
-    let path = format!("state/{device_id}/note/test-note.json");
+    provider.ensure_collection("v4/objects/aa").await.unwrap();
+    let path =
+        "v4/objects/aa/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json.gz";
     let body = br#"{"schema_version":2,"smoke":true}"#.to_vec();
     provider
-        .put(&path, body.clone(), "application/json")
+        .put(path, body.clone(), "application/json")
         .await
         .unwrap();
-    assert_eq!(provider.get(&path).await.unwrap(), Some(body));
-    assert!(provider
-        .list(&format!("state/{device_id}/note"))
-        .await
-        .unwrap()
-        .contains(&"test-note.json".to_string()));
+    assert_eq!(provider.get(path).await.unwrap(), Some(body));
+    assert!(provider.list("v4/objects/aa").await.unwrap().contains(
+        &"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json.gz".to_string()
+    ));
+    provider.delete(path).await.unwrap();
 }

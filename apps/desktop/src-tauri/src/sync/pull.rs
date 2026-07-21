@@ -1,5 +1,6 @@
 use super::*;
 
+#[cfg(test)]
 pub(super) async fn pull_state(
     provider: &dyn SyncProvider,
     db: &Database,
@@ -9,10 +10,65 @@ pub(super) async fn pull_state(
     let mut pulled = 0;
     let mut conflicts = 0;
 
-    // List remote device_ids under state/
-    let device_ids = provider.list("state").await.unwrap_or_default();
+    pulled += repair_missing_attachments(provider, db, attachments_dir).await?;
+
+    // Protocol v3: fetch only generations newer than the durable per-device cursor.
+    let mut batch_devices = std::collections::HashSet::new();
+    for file in provider.list("device-heads").await? {
+        let Some(device_id) = file.strip_suffix(".json") else {
+            continue;
+        };
+        if device_id == config.device_id || !is_safe_path_segment(device_id) {
+            continue;
+        }
+        let Some(head) = read_device_head(provider, device_id).await? else {
+            continue;
+        };
+        batch_devices.insert(device_id.to_string());
+        let cursor_scope = format!("webdav-v3:{}", config.endpoint);
+        let cursor = db
+            .get_sync_cursor_value(&cursor_scope, device_id)
+            .map_err(|error| error.to_string())?
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(0);
+        for generation in (cursor + 1)..=head.generation {
+            let path = batch_path(device_id, generation);
+            let bytes = provider
+                .get(&path)
+                .await?
+                .ok_or_else(|| format!("Missing WebDAV change batch {path}"))?;
+            let batch: WebDavBatch = gunzip_json(&bytes)
+                .map_err(|error| format!("Invalid WebDAV change batch {path}: {error}"))?;
+            if batch.schema_version != 1
+                || batch.device_id != device_id
+                || batch.generation != generation
+            {
+                return Err(format!("Invalid WebDAV change batch identity at {path}"));
+            }
+            for envelope in &batch.envelopes {
+                validate_envelope(envelope, device_id)?;
+                let (changed, conflict) =
+                    apply_envelope(provider, db, attachments_dir, envelope, &config.device_id)
+                        .await?;
+                if changed {
+                    pulled += 1;
+                }
+                if conflict {
+                    conflicts += 1;
+                }
+            }
+            db.set_sync_cursor_value(&cursor_scope, device_id, &generation.to_string())
+                .map_err(|error| error.to_string())?;
+        }
+    }
+
+    // Legacy state protocol remains readable for devices that have not migrated yet.
+    let device_ids = provider.list("state").await?;
     for device_id in &device_ids {
-        if device_id == &config.device_id || !is_safe_path_segment(device_id) {
+        if device_id == &config.device_id
+            || !is_safe_path_segment(device_id)
+            || batch_devices.contains(device_id)
+        {
             continue;
         }
         let revision = provider
@@ -112,6 +168,7 @@ pub(super) async fn pull_state(
     Ok((pulled, conflicts))
 }
 
+#[cfg(test)]
 pub(super) fn local_attachment_available(
     db: &Database,
     attachments_dir: &Path,
@@ -164,9 +221,7 @@ pub(super) async fn apply_envelope(
             validate_attachment_path(record)?;
             let local_path = attachments_dir.join(&record.relative_path);
             if !local_path.exists() {
-                let Some(bytes) = provider.get(&format!("attachments/{}", record.id)).await? else {
-                    return Err(format!("Remote attachment {} is missing", record.id));
-                };
+                let bytes = download_attachment(provider, record).await?;
                 validate_attachment(record, &bytes)?;
                 std::fs::create_dir_all(attachments_dir)
                     .map_err(|e| format!("Failed to create attachment directory: {e}"))?;
@@ -185,6 +240,10 @@ pub(super) async fn apply_envelope(
                 .map_err(|e| e.to_string())?;
             Ok((true, false))
         }
+        "clipboard" if envelope.operation == "delete" => db
+            .apply_remote_clipboard_delete(&envelope.entity_id, &causal_version, local_device_id)
+            .map(|changed| (changed, false))
+            .map_err(|e| e.to_string()),
         "clipboard" => {
             let Some(item) = &envelope.clipboard else {
                 return Ok((false, false));
@@ -215,6 +274,81 @@ pub(super) async fn apply_envelope(
         }
         _ => Ok((false, false)),
     }
+}
+
+#[cfg(test)]
+async fn repair_missing_attachments(
+    provider: &dyn SyncProvider,
+    db: &Database,
+    attachments_dir: &Path,
+) -> Result<usize, String> {
+    let mut repaired = 0;
+    for record in db
+        .list_attachments_for_sync()
+        .map_err(|error| error.to_string())?
+    {
+        if attachments_dir.join(&record.relative_path).exists() {
+            continue;
+        }
+        let bytes = download_attachment(provider, &record).await?;
+        validate_attachment(&record, &bytes)?;
+        std::fs::create_dir_all(attachments_dir)
+            .map_err(|error| format!("Failed to create attachment directory: {error}"))?;
+        let temporary_path = attachments_dir.join(format!(".{}.sync-part", record.id));
+        std::fs::write(&temporary_path, &bytes)
+            .map_err(|error| format!("Failed to stage attachment {}: {error}", record.id))?;
+        std::fs::rename(&temporary_path, attachments_dir.join(&record.relative_path))
+            .map_err(|error| format!("Failed to install attachment {}: {error}", record.id))?;
+        repaired += 1;
+    }
+    Ok(repaired)
+}
+
+async fn download_attachment(
+    provider: &dyn SyncProvider,
+    record: &AttachmentRecord,
+) -> Result<Vec<u8>, String> {
+    if let Some(bytes) = v4::download_attachment(provider, record).await? {
+        return Ok(bytes);
+    }
+    if let Some(bytes) = provider.get(&format!("attachments/{}", record.id)).await? {
+        return Ok(bytes);
+    }
+    let manifest_path = attachment_manifest_path(&record.id);
+    let manifest_bytes = provider
+        .get(&manifest_path)
+        .await?
+        .ok_or_else(|| format!("Remote attachment {} is missing", record.id))?;
+    let manifest: AttachmentChunkManifest = serde_json::from_slice(&manifest_bytes)
+        .map_err(|error| format!("Invalid attachment manifest {manifest_path}: {error}"))?;
+    if manifest.schema_version != 1
+        || manifest.id != record.id
+        || manifest.size != record.size as usize
+        || manifest.sha256 != record.id
+        || manifest.chunk_size == 0
+        || manifest.chunks == 0
+    {
+        return Err(format!("Invalid attachment manifest for {}", record.id));
+    }
+    let mut bytes = Vec::with_capacity(manifest.size);
+    for index in 0..manifest.chunks {
+        let path = attachment_chunk_path(&record.id, index);
+        let chunk = provider
+            .get(&path)
+            .await?
+            .ok_or_else(|| format!("Missing attachment chunk {path}"))?;
+        if index + 1 < manifest.chunks && chunk.len() != manifest.chunk_size {
+            return Err(format!("Invalid attachment chunk size at {path}"));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    if bytes.len() != manifest.size || format!("{:x}", Sha256::digest(&bytes)) != manifest.sha256 {
+        return Err(format!(
+            "Attachment {} failed integrity validation",
+            record.id
+        ));
+    }
+    Ok(bytes)
 }
 
 pub(super) fn validate_envelope(

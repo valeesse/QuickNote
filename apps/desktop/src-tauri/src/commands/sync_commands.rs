@@ -39,7 +39,7 @@ pub async fn test_cloud_connection(
 
 #[tauri::command]
 pub async fn sync_now(
-    db: State<'_, Arc<Database>>,
+    db: State<'_, DatabaseState>,
     sync: State<'_, Arc<SyncService>>,
     paths: State<'_, Arc<AppPaths>>,
 ) -> Result<SyncReport, String> {
@@ -47,8 +47,42 @@ pub async fn sync_now(
 }
 
 #[tauri::command]
-pub fn has_pending_sync_changes(db: State<'_, Arc<Database>>) -> Result<bool, String> {
+pub fn has_pending_sync_changes(db: State<'_, DatabaseState>) -> Result<bool, String> {
     db.list_pending_changes(1)
         .map(|changes| !changes.is_empty())
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn pending_sync_change_count(db: State<'_, DatabaseState>) -> Result<i64, String> {
+    db.pending_sync_change_count()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn has_sync_changes(
+    db: State<'_, DatabaseState>,
+    sync: State<'_, Arc<SyncService>>,
+) -> Result<bool, String> {
+    if db
+        .list_pending_changes(1)
+        .map_err(|error| error.to_string())?
+        .is_empty()
+    {
+        sync.has_remote_changes(&db).await
+    } else {
+        Ok(true)
+    }
+}
+
+#[tauri::command]
+pub async fn get_webdav_storage_status(
+    sync: State<'_, Arc<SyncService>>,
+) -> Result<WebDavStorageStatus, String> {
+    sync.webdav_storage_status().await
+}
+
+#[tauri::command]
+pub async fn run_webdav_gc(sync: State<'_, Arc<SyncService>>) -> Result<WebDavGcReport, String> {
+    sync.run_webdav_gc().await
 }

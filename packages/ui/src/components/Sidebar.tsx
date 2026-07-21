@@ -2,7 +2,7 @@ import type { AppView, ClipboardItem, NoteSummary, TagSummary } from "@contracts
 import { SidebarView } from "./sidebar/SidebarView";
 import { useSidebarModel } from "./sidebar/useSidebarModel";
 
-export type SidebarSyncStatus = "disabled" | "idle" | "syncing" | "synced" | "error";
+export type SidebarSyncStatus = "disabled" | "idle" | "waiting" | "syncing" | "retrying" | "synced" | "error";
 
 export interface SidebarProps {
   viewMode: AppView;
@@ -29,6 +29,8 @@ export interface SidebarProps {
   onSelectClipboardItem: (id: string) => void;
   onCreateNoteFromClipboard: (id: string) => void;
   syncStatus?: SidebarSyncStatus;
+  syncLabel?: string;
+  syncPendingCount?: number;
   onSync?: () => void;
   onOpenSettings?: () => void;
   settingsLabel?: string;

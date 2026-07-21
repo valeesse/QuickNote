@@ -2956,6 +2956,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "chrono",
+ "flate2",
  "image",
  "percent-encoding",
  "quick-xml 0.38.4",

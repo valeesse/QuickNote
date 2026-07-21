@@ -207,6 +207,63 @@ impl Database {
         tx.commit()?;
         Ok(true)
     }
+
+    pub fn apply_remote_clipboard_delete(
+        &self,
+        id: &str,
+        remote_version: &CausalVersion,
+        local_device_id: &str,
+    ) -> Result<bool> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let local_dirty: bool = tx.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM sync_changes
+                WHERE synced = 0 AND entity_type = 'clipboard' AND entity_id = ?1
+            )",
+            params![id],
+            |row| row.get(0),
+        )?;
+        let mut local_version = get_entity_version_locked(&tx, "clipboard", id)?;
+        if local_dirty {
+            local_version = Some(ensure_local_causal_version_locked(
+                &tx,
+                "clipboard",
+                id,
+                local_device_id,
+            )?);
+        }
+        let version_to_store = if let Some(local_version) = &local_version {
+            match local_version.relation(remote_version) {
+                CausalRelation::Equal | CausalRelation::Dominates => {
+                    tx.commit()?;
+                    return Ok(false);
+                }
+                CausalRelation::Dominated => remote_version.clone(),
+                CausalRelation::Concurrent => {
+                    let remote_wins = remote_version.deterministic_cmp(local_version).is_gt();
+                    let winner = if remote_wins {
+                        remote_version
+                    } else {
+                        local_version
+                    };
+                    let merged = local_version.merge_with_winner(remote_version, winner);
+                    if !remote_wins {
+                        set_entity_version_locked(&tx, "clipboard", id, &merged, false)?;
+                        tx.commit()?;
+                        return Ok(false);
+                    }
+                    merged
+                }
+            }
+        } else {
+            remote_version.clone()
+        };
+        let changed = tx.execute("DELETE FROM clipboard_items WHERE id = ?1", params![id])?;
+        set_entity_version_locked(&tx, "clipboard", id, &version_to_store, false)?;
+        tx.commit()?;
+        Ok(changed > 0)
+    }
 }
 
 fn prune_clipboard_items_locked(

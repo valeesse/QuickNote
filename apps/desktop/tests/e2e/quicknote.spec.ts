@@ -83,6 +83,75 @@ test("switches repeatedly between existing notes", async ({ page }) => {
   }
 });
 
+test("switching notes does not change their modification time", async ({ page }) => {
+  const originalUpdatedAt = "2024-01-02T03:04:05.000Z";
+  await page.evaluate((updatedAt) => {
+    localStorage.setItem("quicknote-e2e-db", JSON.stringify(
+      ["第一条旧便签", "第二条旧便签"].map((title, index) => ({
+        id: `unchanged-note-${index + 1}`,
+        title,
+        content: `<p>${title}</p>`,
+        is_pinned: false,
+        created_at: updatedAt,
+        updated_at: updatedAt,
+        version: 1,
+        is_deleted: false,
+        tags: [],
+      })),
+    ));
+  }, originalUpdatedAt);
+  await page.reload();
+
+  await noteItem(page, "第一条旧便签").click();
+  await expect(page.locator(".tiptap")).toContainText("第一条旧便签");
+  await noteItem(page, "第二条旧便签").click();
+  await expect(page.locator(".tiptap")).toContainText("第二条旧便签");
+  await page.waitForTimeout(700);
+
+  const notes = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("quicknote-e2e-db") || "[]") as Array<{
+      updated_at: string;
+      version: number;
+    }>,
+  );
+  expect(notes.every((note) => note.updated_at === originalUpdatedAt)).toBe(true);
+  expect(notes.every((note) => note.version === 1)).toBe(true);
+});
+
+test("keeps the latest selection while the previous note is still saving", async ({ page }) => {
+  await page.evaluate(() => {
+    const now = new Date().toISOString();
+    localStorage.setItem("quicknote-e2e-save-delay", "400");
+    localStorage.setItem("quicknote-e2e-db", JSON.stringify(
+      ["待保存便签", "中间便签", "最终便签"].map((title, index) => ({
+        id: `saving-note-${index + 1}`,
+        title,
+        content: `<p>${title}</p>`,
+        is_pinned: false,
+        created_at: now,
+        updated_at: now,
+        version: 1,
+        is_deleted: false,
+        tags: [],
+      })),
+    ));
+  });
+  await page.reload();
+
+  await noteItem(page, "待保存便签").click();
+  const editor = page.locator(".tiptap").first();
+  await editor.click();
+  await page.keyboard.press("End");
+  await page.keyboard.type("修改");
+  await expect(page.getByText("保存中")).toBeVisible();
+
+  await noteItem(page, "中间便签").click();
+  await noteItem(page, "最终便签").click();
+
+  await expect(editor).toContainText("最终便签", { timeout: 5_000 });
+  await expect(editor).not.toContainText("中间便签");
+});
+
 test("switches from search results to a tag filter", async ({ page }) => {
   await page.evaluate(() => {
     const now = new Date().toISOString();
@@ -140,6 +209,22 @@ test("skips automatic sync when there are no local changes", async ({ page }) =>
     .poll(() => page.evaluate(() => Number(localStorage.getItem("quicknote-e2e-sync-check-count") || 0)))
     .toBeGreaterThan(0);
   expect(await page.evaluate(() => Number(localStorage.getItem("quicknote-e2e-sync-count") || 0))).toBe(1);
+});
+
+test("pulls a remote change even when this device has no local changes", async ({ page }) => {
+  await page.evaluate(() => localStorage.setItem("quicknote-e2e-sync-enabled", "true"));
+  await page.reload();
+  await expect
+    .poll(() => page.evaluate(() => Number(localStorage.getItem("quicknote-e2e-sync-count") || 0)))
+    .toBe(1);
+
+  await page.evaluate(() => {
+    localStorage.setItem("quicknote-e2e-sync-remote-dirty", "true");
+    window.dispatchEvent(new Event("focus"));
+  });
+  await expect
+    .poll(() => page.evaluate(() => Number(localStorage.getItem("quicknote-e2e-sync-count") || 0)))
+    .toBe(2);
 });
 
 test("does not roll back newer typing when an older save finishes", async ({ page }) => {

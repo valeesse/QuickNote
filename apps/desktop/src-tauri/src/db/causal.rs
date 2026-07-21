@@ -82,14 +82,16 @@ pub(super) fn ensure_local_causal_version_locked(
 pub(super) fn upsert_remote_note_locked(conn: &Connection, remote: &Note) -> Result<()> {
     conn.execute(
         "INSERT INTO notes(
-            id, title, content, plain_text, preview, is_pinned, sort_order,
-            created_at, updated_at, version, is_deleted
-         ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+            id, title, content, plain_text, preview, yjs_state, yjs_state_version,
+            is_pinned, sort_order, created_at, updated_at, version, is_deleted
+         ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
          ON CONFLICT(id) DO UPDATE SET
             title = excluded.title,
             content = excluded.content,
             plain_text = excluded.plain_text,
             preview = excluded.preview,
+            yjs_state = excluded.yjs_state,
+            yjs_state_version = excluded.yjs_state_version,
             is_pinned = excluded.is_pinned,
             sort_order = excluded.sort_order,
             updated_at = excluded.updated_at,
@@ -101,6 +103,8 @@ pub(super) fn upsert_remote_note_locked(conn: &Connection, remote: &Note) -> Res
             remote.content,
             html_to_text(&remote.content),
             make_preview_without_title(&remote.content),
+            remote.yjs_state,
+            remote.yjs_state_version,
             remote.is_pinned,
             remote.sort_order,
             remote.created_at,

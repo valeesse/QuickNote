@@ -118,6 +118,11 @@ impl CloudProvider {
         Ok((data.envelopes, data.server_seq))
     }
 
+    pub async fn has_changes(&self, since_seq: i64) -> Result<bool, String> {
+        let (envelopes, server_seq) = self.pull(since_seq).await?;
+        Ok(server_seq > since_seq || !envelopes.is_empty())
+    }
+
     pub async fn push(&self, envelopes: &[SyncEnvelope]) -> Result<PushResponse, String> {
         if envelopes.is_empty() {
             return Ok(PushResponse {

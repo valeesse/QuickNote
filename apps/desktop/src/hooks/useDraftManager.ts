@@ -26,6 +26,7 @@ export function useDraftManager(context: Context, loadNotes: () => Promise<void>
           if (attempt > 1 && activeNoteIdRef.current === id) setSaveStatus("retrying");
           const updated = await invoke<Note | null>("update_note", { id, content, yjsState });
           if (!updated) throw new Error("便签已不存在或已被删除");
+          window.dispatchEvent(new Event("quicknote:sync-needed"));
           return updated;
         } catch (err) {
           lastError = err;

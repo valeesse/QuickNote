@@ -158,6 +158,8 @@ export default function App() {
         }}
         isTrashOpen={showTrash}
         syncStatus={sync.status}
+        syncLabel={sync.statusLabel}
+        syncPendingCount={sync.pendingCount}
         onSync={() => void sync.syncNow()}
         onOpenSettings={() => openOnlyPanel("settings")}
         onSelectClipboardItem={(id) => {
@@ -292,6 +294,8 @@ export default function App() {
           onSync={sync.syncNow}
           onTestWebdav={sync.testWebdav}
           onTestCloud={sync.testCloud}
+          onGetWebdavStorageStatus={sync.getWebdavStorageStatus}
+          onRunWebdavGc={sync.runWebdavGc}
           onSaveShortcuts={saveShortcuts}
         />
       )}

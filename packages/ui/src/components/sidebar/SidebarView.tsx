@@ -25,6 +25,8 @@ export function SidebarView({ props, model }: { props: SidebarProps; model: Retu
   onSelectClipboardItem,
   onCreateNoteFromClipboard,
   syncStatus,
+  syncLabel,
+  syncPendingCount = 0,
   onSync,
   onOpenSettings,
   settingsLabel = "设置",
@@ -215,10 +217,17 @@ export function SidebarView({ props, model }: { props: SidebarProps; model: Retu
             className={`focus-ring flex h-8 w-8 items-center justify-center rounded text-xs hover:bg-gray-100 ${
               syncStatus === "error" ? "text-red-500" : "text-gray-500"
             }`}
-            title={formatSyncStatus(syncStatus)}
-            aria-label={formatSyncStatus(syncStatus)}
+            title={syncLabel ?? formatSyncStatus(syncStatus)}
+            aria-label={syncLabel ?? formatSyncStatus(syncStatus)}
           >
-            <RefreshCw className={`h-4 w-4 ${syncStatus === "syncing" ? "animate-spin" : ""}`} />
+            <span className="relative">
+              <RefreshCw className={`h-4 w-4 ${syncStatus === "syncing" ? "animate-spin" : ""}`} />
+              {syncPendingCount > 0 && syncStatus !== "syncing" && (
+                <span className="absolute -right-2 -top-2 min-w-3 rounded-full bg-blue-600 px-0.5 text-[8px] leading-3 text-white">
+                  {syncPendingCount > 99 ? "99+" : syncPendingCount}
+                </span>
+              )}
+            </span>
           </button>
         )}
         {onOpenSettings && (
@@ -285,6 +294,8 @@ export function SidebarView({ props, model }: { props: SidebarProps; model: Retu
 
 function formatSyncStatus(status: SidebarSyncStatus): string {
   if (status === "syncing") return "正在同步";
+  if (status === "waiting") return "等待同步";
+  if (status === "retrying") return "网络不稳定，等待自动重试";
   if (status === "synced") return "同步完成";
   if (status === "error") return "同步失败";
   if (status === "disabled") return "同步未启用";

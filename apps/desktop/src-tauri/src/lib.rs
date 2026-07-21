@@ -5,7 +5,7 @@ mod shortcuts;
 mod sync;
 
 use commands::{AppPaths, ClipboardCaptureState};
-use db::Database;
+use db::{Database, DatabaseState};
 use std::sync::Arc;
 use sync::SyncService;
 use tauri::Manager;
@@ -47,7 +47,7 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
     // Clone Arcs for the menu event closure (owned, not borrowed from app state)
     let sync_svc: Arc<SyncService> = app.state::<Arc<SyncService>>().inner().clone();
-    let db_arc: Arc<Database> = app.state::<Arc<Database>>().inner().clone();
+    let db_arc = app.state::<DatabaseState>().arc();
     let paths_arc: Arc<AppPaths> = app.state::<Arc<AppPaths>>().inner().clone();
     let autostart_item = autostart.clone();
 
@@ -146,7 +146,31 @@ pub fn run() {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let launched_from_autostart = std::env::args().any(|arg| arg == AUTOSTART_ARG);
 
+    let managed_state_plugin = tauri::plugin::Builder::<tauri::Wry, ()>::new("managed-state")
+        .setup(|app, _api| {
+            let app_dir = app.path().app_data_dir()?;
+            std::fs::create_dir_all(&app_dir)?;
+
+            let database = Arc::new(Database::new(app_dir.clone())?);
+            if !app.state::<DatabaseState>().initialize(database) {
+                return Err("database state was initialized more than once".into());
+            }
+
+            app.manage(Arc::new(SyncService::new(app_dir.join("sync.json"))));
+            app.manage(ClipboardCaptureState::default());
+
+            let attachments_dir = app_dir.join("attachments");
+            std::fs::create_dir_all(&attachments_dir)?;
+            app.manage(Arc::new(AppPaths { attachments_dir }));
+            Ok(())
+        })
+        .build();
+
     let builder = tauri::Builder::default()
+        .manage(DatabaseState::default())
+        // Plugin setup runs before configured windows are created. State must be
+        // ready before their frontend can invoke commands such as `list_notes`.
+        .plugin(managed_state_plugin)
         // Pass a marker to distinguish an OS login launch from a normal launch.
         .plugin(
             tauri_plugin_autostart::Builder::new()
@@ -174,27 +198,9 @@ pub fn run() {
                 .path()
                 .app_data_dir()
                 .expect("failed to get app data dir");
-
-            std::fs::create_dir_all(&app_dir).expect("failed to create app data dir");
-
-            let database = Database::new(app_dir.clone()).expect("failed to initialize database");
-            let db_arc = Arc::new(database);
-            app.manage(db_arc.clone());
-
-            let sync_service = Arc::new(SyncService::new(app_dir.join("sync.json")));
-            app.manage(sync_service.clone());
-
-            let clipboard_capture_state = ClipboardCaptureState::default();
-            app.manage(clipboard_capture_state.clone());
-
-            let attachments_dir = app
-                .path()
-                .app_data_dir()
-                .expect("failed to get app data dir")
-                .join("attachments");
-            std::fs::create_dir_all(&attachments_dir).expect("failed to create attachments dir");
-            let app_paths = Arc::new(AppPaths { attachments_dir });
-            app.manage(app_paths.clone());
+            let db_arc = app.state::<DatabaseState>().arc();
+            let sync_service: Arc<SyncService> = app.state::<Arc<SyncService>>().inner().clone();
+            let clipboard_capture_state = app.state::<ClipboardCaptureState>().inner().clone();
 
             let device_id = sync_service
                 .get_config()
@@ -273,6 +279,10 @@ pub fn run() {
             commands::test_webdav_connection,
             commands::test_cloud_connection,
             commands::has_pending_sync_changes,
+            commands::pending_sync_change_count,
+            commands::has_sync_changes,
+            commands::get_webdav_storage_status,
+            commands::run_webdav_gc,
             commands::sync_now,
             commands::clipboard_auto_capture_supported,
             commands::set_clipboard_auto_capture_enabled,

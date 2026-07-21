@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react";
+import type { Dispatch, SetStateAction } from "react";
 import { invoke, isTauri } from "@/utils/tauri";
 import type { Note, NoteSummary, NoteVersion, SaveStatus, TagSummary } from "@/types";
 
@@ -8,8 +9,17 @@ import { useCoreNoteActions } from "./useCoreNoteActions";
 import { useArchiveNoteActions } from "./useArchiveNoteActions";
 
 export function useNotes() {
+  const activeNoteIdRef = useRef<string | null>(null);
   const [notes, setNotes] = useState<NoteSummary[]>([]);
-  const [activeNote, setActiveNote] = useState<Note | null>(null);
+  const [activeNote, setActiveNoteState] = useState<Note | null>(null);
+  const setActiveNote: Dispatch<SetStateAction<Note | null>> = useCallback((next) => {
+    if (typeof next !== "function") activeNoteIdRef.current = next?.id ?? null;
+    setActiveNoteState((current) => {
+      const resolved = typeof next === "function" ? next(current) : next;
+      activeNoteIdRef.current = resolved?.id ?? null;
+      return resolved;
+    });
+  }, []);
   const [isLoading, setIsLoading] = useState(false);
   const [deletedNotes, setDeletedNotes] = useState<NoteSummary[]>([]);
   const [tags, setTags] = useState<TagSummary[]>([]);
@@ -20,16 +30,11 @@ export function useNotes() {
   const [searchQuery, setSearchQuery] = useState("");
   const [initialDrafts] = useState(loadDraftJournal);
   const draftsRef = useRef<Map<string, DraftState>>(initialDrafts);
-  const activeNoteIdRef = useRef<string | null>(null);
   const lastDeletedIdRef = useRef<string | null>(null);
   const loadRequestRef = useRef(0);
   const selectRequestRef = useRef(0);
   const flushAllDraftsRef = useRef<() => Promise<boolean>>(async () => true);
   const draftRecoveryRef = useRef<Promise<void> | null>(null);
-
-  useEffect(() => {
-    activeNoteIdRef.current = activeNote?.id ?? null;
-  }, [activeNote?.id]);
 
   const setSelectedTag = useCallback((tag: string | null) => {
     setSearchQuery("");
@@ -42,7 +47,12 @@ export function useNotes() {
   ) => {
     const currentId = activeNoteIdRef.current;
     if (currentId && results.some((note) => note.id === currentId)) return;
-    if (!(await flushAllDraftsRef.current()) || requestId !== loadRequestRef.current) return;
+    const selectionRequestId = selectRequestRef.current;
+    if (
+      !(await flushAllDraftsRef.current()) ||
+      requestId !== loadRequestRef.current ||
+      selectionRequestId !== selectRequestRef.current
+    ) return;
 
     const nextId = results[0]?.id;
     if (!nextId) {

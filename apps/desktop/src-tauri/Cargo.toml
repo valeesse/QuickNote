@@ -26,6 +26,7 @@ async-trait = "0.1"
 quick-xml = "0.38"
 percent-encoding = "2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+flate2 = "1"
 aes-gcm = "0.10"
 quicknote-protocol = { path = "../../../crates/quicknote-protocol" }
 yrs = "0.27"

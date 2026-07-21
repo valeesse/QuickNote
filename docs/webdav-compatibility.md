@@ -10,13 +10,18 @@
 | `If-None-Match: *` 返回 412 | HTTP mock | 远端内容相同视为幂等成功，不同则报冲突 |
 | PUT 已落远端但确认丢失 | provider 故障注入 | outbox 保留；重试同一路径后才标记 synced |
 | WebDAV 响应超时 | HTTP mock | 30 秒生产超时；测试短超时可控失败 |
-| 非法 change JSON | provider 故障注入 | 同步失败，设备 cursor 不推进 |
-| 附件缺失、路径穿越、大小或 SHA-256 不符 | provider/单元测试 | 拒绝落盘，cursor 不越过失败 change |
-| schema v1 / v2 | 协议单元测试 | v1 映射单设备向量，v2 强制携带版本向量 |
+| 高延迟/间歇断网 | v4 head 最后提交 + 指数退避 | 未提交 root 不可见，outbox 保持可重试 |
+| 10万次同实体编辑 | root/shard/object + 两阶段 GC | 回收后占用与当前状态相关，不随历史次数增长 |
+| 上传完成但 head 丢确认 | 内容寻址幂等提交 | 重试识别已提交对象并安全确认 outbox |
+| 新设备恢复 | 当前 heads/roots | 无需历史 generation 即可恢复 |
+| 非法或缺失对象 | SHA-256 校验 | 同步失败，设备 cursor 不推进 |
+| 附件缺失、路径穿越、大小或 SHA-256 不符 | provider/单元测试 | 拒绝落盘，cursor 不越过失败对象 |
+| 两阶段 GC | 当前可达图 + 7天 marker | 上传中的孤儿不会被立即删除，重新可达会撤销 marker |
+| 旧 v1-v3 目录 | 破坏性升级 | v4 客户端完全忽略；迁移时先备份再清空远端根目录 |
 
 ## 外部服务验证入口
 
-`sync::webdav::tests::live_webdav_smoke_test` 默认忽略。设置以下环境变量后可对
+`sync::tests::transfer::live_v4_end_to_end_and_gc` 默认忽略。设置以下环境变量后可对
 Nextcloud、标准 WebDAV 或厂商服务运行同一组 MKCOL/PROPFIND/PUT/GET 验证：
 
 ```text

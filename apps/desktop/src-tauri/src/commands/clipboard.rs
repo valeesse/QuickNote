@@ -29,7 +29,7 @@ pub fn set_clipboard_auto_capture_enabled(
 
 #[tauri::command]
 pub fn sync_clipboard_history(
-    db: State<'_, Arc<Database>>,
+    db: State<'_, DatabaseState>,
     sync: State<'_, Arc<SyncService>>,
 ) -> Result<ClipboardSyncResult, String> {
     #[cfg(target_os = "windows")]
@@ -51,7 +51,7 @@ pub fn sync_clipboard_history(
 #[tauri::command]
 pub fn capture_clipboard(
     app: AppHandle,
-    db: State<'_, Arc<Database>>,
+    db: State<'_, DatabaseState>,
     sync: State<'_, Arc<SyncService>>,
     paths: State<'_, Arc<AppPaths>>,
     capture_state: State<'_, ClipboardCaptureState>,
@@ -68,7 +68,7 @@ pub fn capture_clipboard(
         return Ok(None);
     }
     let device_id = sync.get_config()?.device_id;
-    let item = capture_content_if_new(&db, &device_id, &capture_state, &content, None)?;
+    let item = capture_content_if_new(&db, &device_id, &capture_state, &content, None, true)?;
     if let Some(ref item) = item {
         let _ = app.emit("clipboard-captured", item);
     }
@@ -82,7 +82,12 @@ pub fn prime_clipboard_capture(
 ) -> Result<bool, String> {
     let content = match app.clipboard().read_text() {
         Ok(text) if !text.trim().is_empty() => text,
-        _ => return Ok(false),
+        _ => {
+            capture_state
+                .accept_next_duplicate
+                .store(false, Ordering::Release);
+            return Ok(false);
+        }
     };
     let normalized = content.replace("\r\n", "\n").replace('\r', "\n");
     *capture_state
@@ -92,12 +97,18 @@ pub fn prime_clipboard_capture(
         "{:x}",
         Sha256::digest(format!("clipboard:text:{normalized}"))
     ));
+    // Clearing history must not immediately re-import the value that is still in the
+    // system clipboard. The next real clipboard change may nevertheless contain the
+    // same value (the user copied it again), so allow that event to be captured once.
+    capture_state
+        .accept_next_duplicate
+        .store(true, Ordering::Release);
     Ok(true)
 }
 
 #[tauri::command]
 pub fn list_clipboard_items(
-    db: State<'_, Arc<Database>>,
+    db: State<'_, DatabaseState>,
     query: String,
 ) -> Result<Vec<ClipboardItem>, String> {
     db.list_clipboard_items(&query, 500)
@@ -107,7 +118,7 @@ pub fn list_clipboard_items(
 #[tauri::command]
 pub fn copy_clipboard_item(
     app: AppHandle,
-    db: State<'_, Arc<Database>>,
+    db: State<'_, DatabaseState>,
     capture_state: State<ClipboardCaptureState>,
     id: String,
 ) -> Result<bool, String> {
@@ -135,6 +146,9 @@ pub fn copy_clipboard_item(
                 .clipboard()
                 .write_html(item.content.clone(), Some(plain_text));
         }
+        capture_state
+            .accept_next_duplicate
+            .store(false, Ordering::Release);
         Ok(true)
     })();
     capture_state
@@ -171,9 +185,14 @@ pub fn start_clipboard_monitor(
                 if content.trim().is_empty() {
                     continue;
                 }
-                if let Ok(Some(item)) =
-                    capture_content_if_new(&poll_db, &poll_device_id, &poll_state, &content, None)
-                {
+                if let Ok(Some(item)) = capture_content_if_new(
+                    &poll_db,
+                    &poll_device_id,
+                    &poll_state,
+                    &content,
+                    None,
+                    false,
+                ) {
                     let _ = poll_app.emit("clipboard-captured", item);
                 }
             }
@@ -205,6 +224,7 @@ pub fn start_clipboard_monitor(
                     &worker_state,
                     &content,
                     None,
+                    true,
                 ) {
                     let _ = worker_app.emit("clipboard-captured", item);
                 }
@@ -236,6 +256,7 @@ fn capture_content_if_new(
     capture_state: &ClipboardCaptureState,
     content: &str,
     captured_at: Option<&str>,
+    accept_primed_duplicate: bool,
 ) -> Result<Option<ClipboardItem>, String> {
     let normalized = content.replace("\r\n", "\n").replace('\r', "\n");
     if normalized.trim().is_empty() {
@@ -247,7 +268,17 @@ fn capture_content_if_new(
         .lock()
         .map_err(|_| "clipboard capture state is unavailable".to_string())?;
     if current.as_ref() == Some(&fingerprint) {
-        return Ok(None);
+        if !accept_primed_duplicate
+            || !capture_state
+                .accept_next_duplicate
+                .swap(false, Ordering::AcqRel)
+        {
+            return Ok(None);
+        }
+    } else {
+        capture_state
+            .accept_next_duplicate
+            .store(false, Ordering::Release);
     }
     let item = match captured_at {
         Some(timestamp) => db.capture_clipboard_at(content, device_id, timestamp),
@@ -258,6 +289,35 @@ fn capture_content_if_new(
     Ok(Some(item))
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_real_change_can_capture_the_value_primed_after_history_was_cleared() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::new(dir.path().to_path_buf()).unwrap();
+        db.capture_clipboard("copied again", "device-a").unwrap();
+        db.clear_clipboard_items().unwrap();
+
+        let state = ClipboardCaptureState::default();
+        let fingerprint = clipboard_fingerprint("copied again");
+        *state.fingerprint.lock().unwrap() = Some(fingerprint);
+        state.accept_next_duplicate.store(true, Ordering::Release);
+
+        let unchanged_poll =
+            capture_content_if_new(&db, "device-a", &state, "copied again", None, false).unwrap();
+        let real_change =
+            capture_content_if_new(&db, "device-a", &state, "copied again", None, true).unwrap();
+        let repeated_event =
+            capture_content_if_new(&db, "device-a", &state, "copied again", None, true).unwrap();
+
+        assert!(unchanged_poll.is_none());
+        assert_eq!(real_change.unwrap().content, "copied again");
+        assert!(repeated_event.is_none());
+    }
+}
+
 fn clipboard_fingerprint(normalized: &str) -> String {
     format!(
         "{:x}",
@@ -266,16 +326,16 @@ fn clipboard_fingerprint(normalized: &str) -> String {
 }
 
 #[tauri::command]
-pub fn toggle_clipboard_pin(db: State<'_, Arc<Database>>, id: String) -> Result<bool, String> {
+pub fn toggle_clipboard_pin(db: State<'_, DatabaseState>, id: String) -> Result<bool, String> {
     db.toggle_clipboard_pin(&id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn delete_clipboard_item(db: State<'_, Arc<Database>>, id: String) -> Result<bool, String> {
+pub fn delete_clipboard_item(db: State<'_, DatabaseState>, id: String) -> Result<bool, String> {
     db.delete_clipboard_item(&id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn clear_clipboard(db: State<'_, Arc<Database>>) -> Result<usize, String> {
+pub fn clear_clipboard(db: State<'_, DatabaseState>) -> Result<usize, String> {
     db.clear_clipboard_items().map_err(|e| e.to_string())
 }

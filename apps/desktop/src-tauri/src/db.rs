@@ -2,8 +2,9 @@ use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::ops::Deref;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, OnceLock};
 use uuid::Uuid;
 
 pub use quicknote_protocol::{
@@ -36,6 +37,34 @@ pub struct SyncChange {
 
 pub struct Database {
     conn: Mutex<Connection>,
+}
+
+#[derive(Default)]
+pub struct DatabaseState {
+    database: OnceLock<Arc<Database>>,
+}
+
+impl DatabaseState {
+    pub fn initialize(&self, database: Arc<Database>) -> bool {
+        self.database.set(database).is_ok()
+    }
+
+    pub fn arc(&self) -> Arc<Database> {
+        self.database
+            .get()
+            .expect("database state has not been initialized")
+            .clone()
+    }
+}
+
+impl Deref for DatabaseState {
+    type Target = Database;
+
+    fn deref(&self) -> &Self::Target {
+        self.database
+            .get()
+            .expect("database state has not been initialized")
+    }
 }
 
 impl Database {

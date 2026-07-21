@@ -44,4 +44,20 @@ export interface SyncReport {
   conflicts: number;
 }
 
-export type SyncStatus = "disabled" | "idle" | "syncing" | "synced" | "error";
+export interface WebDavStorageStatus {
+  protocol_version: number;
+  workspace_id: string;
+  epoch: number;
+  devices: number;
+  stored_objects: number;
+  reachable_objects: number;
+  pending_gc_objects: number;
+  stored_bytes: number;
+}
+
+export interface WebDavGcReport {
+  deleted_objects: number;
+  status: WebDavStorageStatus;
+}
+
+export type SyncStatus = "disabled" | "idle" | "waiting" | "syncing" | "retrying" | "synced" | "error";
