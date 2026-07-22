@@ -35,7 +35,6 @@ export function ScrollToTopButton<T extends HTMLElement>({
       aria-label="返回顶部"
     >
       <ArrowUp aria-hidden="true" />
-      <span>顶部</span>
     </button>
   );
 }
