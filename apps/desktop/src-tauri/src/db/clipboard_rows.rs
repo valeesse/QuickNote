@@ -108,7 +108,7 @@ pub(super) fn delete_clipboard_attachment_refs_locked(
     Ok(())
 }
 
-pub(super) fn attachment_ids_from_content(content: &str) -> Vec<String> {
+pub(crate) fn attachment_ids_from_content(content: &str) -> Vec<String> {
     const PREFIX: &str = "attachment://";
     let mut remaining = content;
     let mut ids = Vec::new();

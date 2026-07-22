@@ -88,6 +88,59 @@ pub fn get_attachment_data_url(
 }
 
 #[tauri::command]
+pub fn get_attachment_preview(
+    db: State<'_, DatabaseState>,
+    paths: State<'_, Arc<AppPaths>>,
+    id: String,
+) -> Result<Attachment, String> {
+    let record = db
+        .get_attachment(&id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Attachment not found".to_string())?;
+    let original_path = paths.attachments_dir.join(&record.relative_path);
+    if !record.mime_type.starts_with("image/") {
+        return Ok(Attachment {
+            id,
+            path: original_path.to_string_lossy().to_string(),
+        });
+    }
+
+    let preview_path = paths.attachments_dir.join(format!("{id}.preview.png"));
+    if !preview_path.exists() {
+        let bytes = std::fs::read(&original_path)
+            .map_err(|e| format!("Failed to read attachment preview source: {e}"))?;
+        let decoded = image::load_from_memory(&bytes)
+            .map_err(|e| format!("Failed to decode attachment preview: {e}"))?;
+        let preview = decoded.thumbnail(640, 480).into_rgba8();
+        let mut png = Vec::new();
+        PngEncoder::new(Cursor::new(&mut png))
+            .write_image(
+                preview.as_raw(),
+                preview.width(),
+                preview.height(),
+                ColorType::Rgba8.into(),
+            )
+            .map_err(|e| format!("Failed to encode attachment preview: {e}"))?;
+        let temporary_path = paths
+            .attachments_dir
+            .join(format!(".{id}.{}.preview.part", uuid::Uuid::new_v4()));
+        std::fs::write(&temporary_path, png)
+            .map_err(|e| format!("Failed to write attachment preview: {e}"))?;
+        if let Err(error) = std::fs::rename(&temporary_path, &preview_path) {
+            if preview_path.exists() {
+                let _ = std::fs::remove_file(&temporary_path);
+            } else {
+                return Err(format!("Failed to publish attachment preview: {error}"));
+            }
+        }
+    }
+    Ok(Attachment {
+        id,
+        path: preview_path.to_string_lossy().to_string(),
+    })
+}
+
+#[tauri::command]
 pub fn cleanup_attachments(
     db: State<'_, DatabaseState>,
     paths: State<'_, Arc<AppPaths>>,
@@ -115,6 +168,12 @@ fn cleanup_attachment_records(
     for record in records {
         let path = paths.attachments_dir.join(&record.relative_path);
         if !path.exists() || std::fs::remove_file(&path).is_ok() {
+            let preview_path = paths
+                .attachments_dir
+                .join(format!("{}.preview.png", record.id));
+            if preview_path.exists() {
+                let _ = std::fs::remove_file(preview_path);
+            }
             db.remove_attachment_record(&record.id)
                 .map_err(|e| e.to_string())?;
             removed += 1;

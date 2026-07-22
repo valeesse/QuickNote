@@ -135,8 +135,10 @@ pub fn prime_clipboard_capture(
 pub fn list_clipboard_items(
     db: State<'_, DatabaseState>,
     query: String,
+    limit: Option<i64>,
+    offset: Option<i64>,
 ) -> Result<Vec<ClipboardItem>, String> {
-    db.list_clipboard_items(&query, 500)
+    db.list_clipboard_items_page(&query, limit.unwrap_or(50), offset.unwrap_or(0))
         .map_err(|e| e.to_string())
 }
 
@@ -170,7 +172,7 @@ pub fn copy_clipboard_item(
                     .write_html(item.content.clone(), Some(plain_text.clone()))
                     .map_err(|e| e.to_string())?;
             }
-        } else {
+        } else if item.kind != "rich" {
             app.clipboard()
                 .write_text(plain_text.clone())
                 .map_err(|e| e.to_string())?;
@@ -181,9 +183,10 @@ pub fn copy_clipboard_item(
                 .lock()
                 .map_err(|_| "clipboard capture state is unavailable".to_string())? =
                 Some(clipboard_fingerprint(&item.content));
-            let _ = app
-                .clipboard()
-                .write_html(item.content.clone(), Some(plain_text));
+            let system_html = clipboard_html_for_system(&item, &db, &paths)?;
+            app.clipboard()
+                .write_html(system_html, Some(plain_text))
+                .map_err(|e| e.to_string())?;
         }
         capture_state
             .accept_next_duplicate
@@ -211,7 +214,7 @@ pub fn start_clipboard_monitor(
         let poll_device_id = device_id.clone();
         let poll_state = capture_state.clone();
         tauri::async_runtime::spawn(async move {
-            let mut timer = tokio::time::interval(std::time::Duration::from_millis(400));
+            let mut timer = tokio::time::interval(std::time::Duration::from_millis(1_500));
             timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 timer.tick().await;
@@ -242,7 +245,9 @@ pub fn start_clipboard_monitor(
 
     #[cfg(target_os = "windows")]
     {
-        let (sender, receiver) = std::sync::mpsc::channel::<DataPackageView>();
+        const CLIPBOARD_EVENT_QUEUE_CAPACITY: usize = 32;
+        let (sender, receiver) =
+            std::sync::mpsc::sync_channel::<DataPackageView>(CLIPBOARD_EVENT_QUEUE_CAPACITY);
         let worker_app = app.clone();
         let worker_db = db;
         let worker_paths = paths;
@@ -278,16 +283,23 @@ pub fn start_clipboard_monitor(
             }
         });
         let event_state = capture_state;
+        let last_sequence = Arc::new(AtomicU32::new(0));
         let handler = EventHandler::<IInspectable>::new(move |_, _| {
             if !event_state.enabled.load(Ordering::Acquire)
                 || event_state.suppress_events.load(Ordering::Acquire)
             {
                 return Ok(());
             }
+            if let Some(sequence) = clipboard_win::seq_num() {
+                let sequence = sequence.get();
+                if last_sequence.swap(sequence, Ordering::AcqRel) == sequence {
+                    return Ok(());
+                }
+            }
             // GetContent returns a snapshot. Taking it inside the event callback preserves
             // intermediate values even when the user copies several items very quickly.
             if let Ok(package) = Clipboard::GetContent() {
-                let _ = sender.send(package);
+                let _ = sender.try_send(package);
             }
             Ok(())
         });

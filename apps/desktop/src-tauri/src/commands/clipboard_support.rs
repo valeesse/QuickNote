@@ -48,6 +48,9 @@ pub(super) fn read_windows_clipboard_image_html_with_retry(
 ) -> Result<Option<String>, String> {
     const ATTEMPTS: usize = 6;
     for attempt in 0..ATTEMPTS {
+        if let Some(content) = read_windows_native_png_html(db, paths)? {
+            return Ok(Some(content));
+        }
         match read_clipboard_image_html(app, db, paths) {
             Ok(Some(content)) => return Ok(Some(content)),
             Err(error) if attempt + 1 == ATTEMPTS => return Err(error),
@@ -60,12 +63,58 @@ pub(super) fn read_windows_clipboard_image_html_with_retry(
     Ok(None)
 }
 
+#[cfg(target_os = "windows")]
+fn read_windows_native_png_html(db: &Database, paths: &AppPaths) -> Result<Option<String>, String> {
+    use clipboard_win::{formats::RawData, register_format, Clipboard as WinClipboard, Getter};
+
+    let Some(format) = register_format("PNG") else {
+        return Ok(None);
+    };
+    let Ok(_clipboard) = WinClipboard::new_attempts(5) else {
+        return Ok(None);
+    };
+    let mut png = Vec::new();
+    if RawData(format.get()).read_clipboard(&mut png).is_err() {
+        return Ok(None);
+    }
+    if png.len() < 8 || png.len() > 20 * 1024 * 1024 || &png[..8] != b"\x89PNG\r\n\x1a\n" {
+        return Ok(None);
+    }
+    let id = save_attachment_bytes(db, paths, &png, "png", "image/png")?;
+    Ok(Some(format!(
+        r#"<img src="attachment://{id}" data-attachment-id="{id}" alt="剪贴板图片" title="剪贴板图片">"#
+    )))
+}
+
 pub(super) fn clipboard_plain_text(item: &ClipboardItem) -> String {
     if item.kind == "rich" || item.kind == "image" {
         strip_html_tags(&item.content)
     } else {
         item.content.clone()
     }
+}
+
+pub(super) fn clipboard_html_for_system(
+    item: &ClipboardItem,
+    db: &Database,
+    paths: &AppPaths,
+) -> Result<String, String> {
+    let mut html = item.content.clone();
+    for id in crate::db::clipboard_attachment_ids(&item.content) {
+        let record = db
+            .get_attachment(&id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("Clipboard attachment {id} was not found"))?;
+        let bytes = std::fs::read(paths.attachments_dir.join(record.relative_path))
+            .map_err(|e| format!("Failed to read rich clipboard attachment: {e}"))?;
+        let data_url = format!(
+            "data:{};base64,{}",
+            record.mime_type,
+            general_purpose::STANDARD.encode(bytes)
+        );
+        html = html.replace(&format!("attachment://{id}"), &data_url);
+    }
+    Ok(html)
 }
 
 pub(super) fn write_clipboard_image(

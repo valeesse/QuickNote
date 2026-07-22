@@ -10,6 +10,8 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::io::Cursor;
 use std::path::PathBuf;
+#[cfg(target_os = "windows")]
+use std::sync::atomic::AtomicU32;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,

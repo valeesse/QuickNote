@@ -55,6 +55,27 @@ fn clipboard_retains_only_the_500_most_relevant_items() {
 }
 
 #[test]
+fn clipboard_history_pages_without_repeating_items() {
+    let (_dir, db) = database();
+    for index in 0..75 {
+        db.capture_clipboard_at(
+            &format!("page-item-{index:03}"),
+            "device-a",
+            &format!("2026-01-01T00:{:02}:{:02}Z", index / 60, index % 60),
+        )
+        .unwrap();
+    }
+
+    let first = db.list_clipboard_items_page("", 50, 0).unwrap();
+    let second = db.list_clipboard_items_page("", 50, 50).unwrap();
+    assert_eq!(first.len(), 50);
+    assert_eq!(second.len(), 25);
+    assert!(first
+        .iter()
+        .all(|item| !second.iter().any(|next| next.id == item.id)));
+}
+
+#[test]
 fn clipboard_image_attachments_are_not_orphaned() {
     let (_dir, db) = database();
     let id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";

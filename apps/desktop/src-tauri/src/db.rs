@@ -329,3 +329,7 @@ use causal::*;
 use clipboard_rows::*;
 use content::*;
 use note_rows::*;
+
+pub(crate) fn clipboard_attachment_ids(content: &str) -> Vec<String> {
+    attachment_ids_from_content(content)
+}

@@ -275,6 +275,7 @@ pub fn run() {
             commands::save_attachment,
             commands::get_attachment,
             commands::get_attachment_data_url,
+            commands::get_attachment_preview,
             commands::cleanup_attachments,
             commands::get_sync_config,
             commands::set_sync_config,

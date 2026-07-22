@@ -63,7 +63,17 @@ impl Database {
         Ok(item)
     }
 
+    #[cfg(test)]
     pub fn list_clipboard_items(&self, query: &str, limit: i64) -> Result<Vec<ClipboardItem>> {
+        self.list_clipboard_items_page(query, limit, 0)
+    }
+
+    pub fn list_clipboard_items_page(
+        &self,
+        query: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<ClipboardItem>> {
         let conn = self.conn.lock().unwrap();
         let pattern = format!("%{}%", query.trim());
         let mut stmt = conn.prepare(
@@ -72,11 +82,11 @@ impl Database {
              FROM clipboard_items
              WHERE is_deleted = 0 AND (?1 = '%%' OR content LIKE ?1)
              ORDER BY is_pinned DESC, last_copied_at DESC, created_at DESC
-             LIMIT ?2",
+             LIMIT ?2 OFFSET ?3",
         )?;
         let items = stmt
             .query_map(
-                params![pattern, limit.clamp(1, 500)],
+                params![pattern, limit.clamp(1, 500), offset.max(0)],
                 clipboard_item_from_row,
             )?
             .collect();
