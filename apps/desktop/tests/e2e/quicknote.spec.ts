@@ -408,10 +408,12 @@ test("hydrates local clipboard images without loading remote trackers", async ({
   await expect(remoteImage).not.toHaveAttribute("src", /.+/);
 });
 
-test("renders formatted text as rich text and sizes each card independently", async ({ page }) => {
+test("renders formatted text in a compact masonry layout", async ({ page }) => {
+  await page.setViewportSize({ width: 1_000, height: 900 });
   await page.evaluate(() => {
     const recent = new Date().toISOString();
     const older = new Date(Date.now() - 1_000).toISOString();
+    const oldest = new Date(Date.now() - 2_000).toISOString();
     const item = (id: string, content: string, timestamp: string) => ({
       id,
       kind: "rich",
@@ -427,15 +429,16 @@ test("renders formatted text as rich text and sizes each card independently", as
     });
     localStorage.setItem("quicknote-e2e-clipboard-db", JSON.stringify([
       item(
-        "short-formatted",
-        '<p><span style="font-weight: bold; color: rgb(255, 0, 0); position: fixed">短富文本</span></p>',
+        "long-formatted",
+        `<pre>${Array.from({ length: 18 }, (_, index) => `格式代码行 ${index + 1}`).join("\n")}</pre>`,
         recent,
       ),
       item(
-        "long-formatted",
-        `<pre>${Array.from({ length: 18 }, (_, index) => `格式代码行 ${index + 1}`).join("\n")}</pre>`,
+        "short-formatted",
+        '<p style="background-color: rgb(254, 226, 226)"><span style="font-weight: bold; color: rgb(255, 0, 0); position: fixed">短富文本</span></p>',
         older,
       ),
+      item("following-formatted", "<p>后续瀑布流卡片</p>", oldest),
     ]));
   });
   await page.reload();
@@ -443,17 +446,33 @@ test("renders formatted text as rich text and sizes each card independently", as
 
   const shortCard = page.locator(".clipboard-card").filter({ hasText: "短富文本" });
   const longCard = page.locator(".clipboard-card").filter({ hasText: "格式代码行 18" });
+  const followingCard = page.locator(".clipboard-card").filter({ hasText: "后续瀑布流卡片" });
   await expect(shortCard.getByText("富文本", { exact: true })).toBeVisible();
   await expect(longCard.getByText("富文本", { exact: true })).toBeVisible();
   const formattedSpan = shortCard.locator("span").filter({ hasText: "短富文本" }).last();
+  const coloredBlock = shortCard.locator('p[style*="background-color"]');
   await expect(formattedSpan).toHaveCSS("font-weight", "700");
   await expect(formattedSpan).toHaveCSS("color", "rgb(255, 0, 0)");
   await expect(formattedSpan).not.toHaveCSS("position", "fixed");
+  await expect(coloredBlock).toHaveCSS("padding-left", "10px");
   const [shortHeight, longHeight] = await Promise.all([
     shortCard.evaluate((element) => element.getBoundingClientRect().height),
     longCard.evaluate((element) => element.getBoundingClientRect().height),
   ]);
   expect(shortHeight).toBeLessThan(longHeight - 40);
+  await expect.poll(async () => {
+    const [shortBox, longBox, followingBox] = await Promise.all([
+      shortCard.boundingBox(),
+      longCard.boundingBox(),
+      followingCard.boundingBox(),
+    ]);
+    return Boolean(
+      shortBox && longBox && followingBox
+      && Math.abs(shortBox.x - followingBox.x) < 2
+      && followingBox.y >= shortBox.y + shortBox.height
+      && followingBox.y < longBox.y + longBox.height,
+    );
+  }).toBe(true);
 });
 
 test("provides mobile navigation and manual clipboard capture", async ({ page }) => {

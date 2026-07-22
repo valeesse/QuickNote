@@ -117,6 +117,18 @@
   text-align: left;
 }
 
+.clipboard-card__rich :where(p, div, pre, blockquote, table)[style*="background-color"] {
+  padding: 8px 10px;
+  border-radius: 8px;
+}
+
+.clipboard-card__rich :where(span, strong, em, b, i, u, s, mark)[style*="background-color"] {
+  padding: 0.08em 0.28em;
+  border-radius: 0.25em;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
 .clipboard-card__rich :where(img) {
   display: block;
   max-width: 100%;

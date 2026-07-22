@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Search, Pin, PinOff, Copy, Clipboard, Trash2 } from "lucide-react";
 import type { ClipboardItem } from "@contracts";
 import { formatRelativeTime } from "../utils/format";
@@ -58,6 +58,7 @@ export function ClipboardPanel({
 }: ClipboardPanelProps) {
   const [capturing, setCapturing] = useState(false);
   const [captureMessage, setCaptureMessage] = useState<string | null>(null);
+  const gridRef = useRef<HTMLDivElement | null>(null);
   const cardRefs = useRef(new Map<string, HTMLElement>());
 
   const handleCapture = useCallback(async () => {
@@ -78,6 +79,53 @@ export function ClipboardPanel({
     const element = cardRefs.current.get(focusedItemId);
     element?.scrollIntoView({ block: "center", behavior: "smooth" });
   }, [focusedItemId, items]);
+
+  useLayoutEffect(() => {
+    const grid = gridRef.current;
+    if (!grid || items.length === 0) return;
+    const gap = 16;
+    const minColumnWidth = 300;
+    const cards = items
+      .map((item) => cardRefs.current.get(item.id))
+      .filter((card): card is HTMLElement => Boolean(card));
+    if (cards.length === 0) return;
+    let frame = 0;
+    const layout = () => {
+      frame = 0;
+      const width = grid.clientWidth;
+      if (width <= 0) return;
+      const columns = Math.max(1, Math.floor((width + gap) / (minColumnWidth + gap)));
+      const columnWidth = (width - gap * (columns - 1)) / columns;
+      const columnHeights = Array<number>(columns).fill(0);
+      for (const card of cards) card.style.width = `${columnWidth}px`;
+      for (const card of cards) {
+        const column = columnHeights.indexOf(Math.min(...columnHeights));
+        const top = columnHeights[column];
+        card.style.left = `${column * (columnWidth + gap)}px`;
+        card.style.top = `${top}px`;
+        columnHeights[column] = top + card.getBoundingClientRect().height + gap;
+      }
+      const height = Math.max(...columnHeights) - gap;
+      grid.style.height = `${Math.max(0, height)}px`;
+    };
+    const scheduleLayout = () => {
+      if (!frame) frame = window.requestAnimationFrame(layout);
+    };
+    const observer = new ResizeObserver(scheduleLayout);
+    observer.observe(grid);
+    for (const card of cards) observer.observe(card);
+    layout();
+    return () => {
+      observer.disconnect();
+      if (frame) window.cancelAnimationFrame(frame);
+      grid.style.removeProperty("height");
+      for (const card of cards) {
+        card.style.removeProperty("left");
+        card.style.removeProperty("top");
+        card.style.removeProperty("width");
+      }
+    };
+  }, [items]);
 
   return (
     <div className="clipboard-panel">
@@ -148,7 +196,7 @@ export function ClipboardPanel({
               </p>
             </div>
           ) : (
-            <div className="clipboard-panel__grid">
+            <div ref={gridRef} className="clipboard-panel__grid">
               {items.map((item) => (
                 <ClipboardCard
                   key={item.id}
