@@ -70,6 +70,32 @@ fn clipboard_image_attachments_are_not_orphaned() {
 }
 
 #[test]
+fn deleting_clipboard_image_queues_its_attachment_for_gc() {
+    let (_dir, db) = database();
+    let attachment_id = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    db.register_attachment(
+        attachment_id,
+        &format!("{attachment_id}.png"),
+        "image/png",
+        12,
+    )
+    .unwrap();
+    let item = db
+        .capture_clipboard(
+            &format!(r#"<img src="attachment://{attachment_id}">"#),
+            "device-a",
+        )
+        .unwrap();
+
+    assert!(db.clipboard_attachment_gc_candidates().unwrap().is_empty());
+    db.delete_clipboard_item(&item.id).unwrap();
+    assert_eq!(
+        db.clipboard_attachment_gc_candidates().unwrap()[0].id,
+        attachment_id
+    );
+}
+
+#[test]
 fn clipboard_classifies_image_first_mixed_content_as_rich() {
     let (_dir, db) = database();
     let mixed = db

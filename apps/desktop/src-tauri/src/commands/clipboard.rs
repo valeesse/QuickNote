@@ -31,12 +31,14 @@ pub fn set_clipboard_auto_capture_enabled(
 pub fn sync_clipboard_history(
     db: State<'_, DatabaseState>,
     sync: State<'_, Arc<SyncService>>,
+    paths: State<'_, Arc<AppPaths>>,
 ) -> Result<ClipboardSyncResult, String> {
     #[cfg(target_os = "windows")]
     {
         let device_id = sync.get_config()?.device_id;
         let captured =
             tauri::async_runtime::block_on(capture_windows_clipboard_history(&db, &device_id))?;
+        cleanup_clipboard_attachment_candidates(&db, &paths)?;
         Ok(ClipboardSyncResult { captured })
     }
 
@@ -44,6 +46,7 @@ pub fn sync_clipboard_history(
     {
         let _ = db;
         let _ = sync;
+        let _ = paths;
         Ok(ClipboardSyncResult { captured: 0 })
     }
 }
@@ -91,6 +94,7 @@ pub fn capture_clipboard(
     let device_id = sync.get_config()?.device_id;
     let item = capture_content_if_new(&db, &device_id, &capture_state, &content, None, true)?;
     if let Some(ref item) = item {
+        cleanup_clipboard_attachment_candidates(&db, &paths)?;
         let _ = app.emit("clipboard-captured", item);
     }
     Ok(item)
@@ -268,6 +272,7 @@ pub fn start_clipboard_monitor(
                     None,
                     true,
                 ) {
+                    let _ = cleanup_clipboard_attachment_candidates(&worker_db, &worker_paths);
                     let _ = worker_app.emit("clipboard-captured", item);
                 }
             }
@@ -373,11 +378,26 @@ pub fn toggle_clipboard_pin(db: State<'_, DatabaseState>, id: String) -> Result<
 }
 
 #[tauri::command]
-pub fn delete_clipboard_item(db: State<'_, DatabaseState>, id: String) -> Result<bool, String> {
-    db.delete_clipboard_item(&id).map_err(|e| e.to_string())
+pub fn delete_clipboard_item(
+    db: State<'_, DatabaseState>,
+    paths: State<'_, Arc<AppPaths>>,
+    id: String,
+) -> Result<bool, String> {
+    let changed = db.delete_clipboard_item(&id).map_err(|e| e.to_string())?;
+    if changed {
+        cleanup_clipboard_attachment_candidates(&db, &paths)?;
+    }
+    Ok(changed)
 }
 
 #[tauri::command]
-pub fn clear_clipboard(db: State<'_, DatabaseState>) -> Result<usize, String> {
-    db.clear_clipboard_items().map_err(|e| e.to_string())
+pub fn clear_clipboard(
+    db: State<'_, DatabaseState>,
+    paths: State<'_, Arc<AppPaths>>,
+) -> Result<usize, String> {
+    let changed = db.clear_clipboard_items().map_err(|e| e.to_string())?;
+    if changed > 0 {
+        cleanup_clipboard_attachment_candidates(&db, &paths)?;
+    }
+    Ok(changed)
 }

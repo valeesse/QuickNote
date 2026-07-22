@@ -93,8 +93,26 @@ pub fn cleanup_attachments(
     paths: State<'_, Arc<AppPaths>>,
 ) -> Result<usize, String> {
     let orphans = db.orphan_attachments().map_err(|e| e.to_string())?;
+    cleanup_attachment_records(&db, &paths, orphans)
+}
+
+pub(super) fn cleanup_clipboard_attachment_candidates(
+    db: &Database,
+    paths: &AppPaths,
+) -> Result<usize, String> {
+    let candidates = db
+        .clipboard_attachment_gc_candidates()
+        .map_err(|e| e.to_string())?;
+    cleanup_attachment_records(db, paths, candidates)
+}
+
+fn cleanup_attachment_records(
+    db: &Database,
+    paths: &AppPaths,
+    records: Vec<crate::db::AttachmentRecord>,
+) -> Result<usize, String> {
     let mut removed = 0;
-    for record in orphans {
+    for record in records {
         let path = paths.attachments_dir.join(&record.relative_path);
         if !path.exists() || std::fs::remove_file(&path).is_ok() {
             db.remove_attachment_record(&record.id)

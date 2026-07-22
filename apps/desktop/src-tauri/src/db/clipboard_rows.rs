@@ -74,7 +74,57 @@ pub(super) fn upsert_remote_clipboard_locked(
             item.is_deleted,
         ],
     )?;
+    replace_clipboard_attachment_refs_locked(conn, &item.id, &item.content)?;
     Ok(())
+}
+
+pub(super) fn replace_clipboard_attachment_refs_locked(
+    conn: &Connection,
+    clipboard_id: &str,
+    content: &str,
+) -> Result<()> {
+    conn.execute(
+        "DELETE FROM clipboard_attachment_refs WHERE clipboard_id = ?1",
+        params![clipboard_id],
+    )?;
+    for (ordinal, attachment_id) in attachment_ids_from_content(content).iter().enumerate() {
+        conn.execute(
+            "INSERT OR IGNORE INTO clipboard_attachment_refs(clipboard_id, attachment_id, ordinal)
+             VALUES(?1, ?2, ?3)",
+            params![clipboard_id, attachment_id, ordinal as i64],
+        )?;
+    }
+    Ok(())
+}
+
+pub(super) fn delete_clipboard_attachment_refs_locked(
+    conn: &Connection,
+    clipboard_id: &str,
+) -> Result<()> {
+    conn.execute(
+        "DELETE FROM clipboard_attachment_refs WHERE clipboard_id = ?1",
+        params![clipboard_id],
+    )?;
+    Ok(())
+}
+
+pub(super) fn attachment_ids_from_content(content: &str) -> Vec<String> {
+    const PREFIX: &str = "attachment://";
+    let mut remaining = content;
+    let mut ids = Vec::new();
+    while let Some(offset) = remaining.find(PREFIX) {
+        let value = &remaining[offset + PREFIX.len()..];
+        let id = value
+            .chars()
+            .take_while(|ch| ch.is_ascii_hexdigit())
+            .collect::<String>();
+        let id_len = id.len();
+        if id.len() == 64 && !ids.contains(&id) {
+            ids.push(id);
+        }
+        remaining = &value[id_len.min(value.len())..];
+    }
+    ids
 }
 
 pub(super) fn normalize_clipboard_content(content: &str) -> String {

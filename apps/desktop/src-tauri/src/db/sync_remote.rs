@@ -205,8 +205,7 @@ impl Database {
         {
             let mut stmt = conn.prepare(
                 "SELECT content FROM notes
-                     UNION ALL SELECT content FROM note_versions
-                     UNION ALL SELECT content FROM clipboard_items",
+                     UNION ALL SELECT content FROM note_versions",
             )?;
             let contents = stmt
                 .query_map([], |row| row.get::<_, String>(0))?
@@ -223,14 +222,53 @@ impl Database {
             .collect::<Result<Vec<_>>>()?;
         Ok(records
             .into_iter()
-            .filter(|record| !referenced_content.contains(&format!("attachment://{}", record.id)))
+            .filter(|record| {
+                if referenced_content.contains(&format!("attachment://{}", record.id)) {
+                    return false;
+                }
+                !conn
+                    .query_row(
+                        "SELECT EXISTS(
+                            SELECT 1 FROM clipboard_attachment_refs WHERE attachment_id = ?1
+                         )",
+                        params![record.id],
+                        |row| row.get::<_, bool>(0),
+                    )
+                    .unwrap_or(false)
+            })
             .collect())
+    }
+
+    pub fn clipboard_attachment_gc_candidates(&self) -> Result<Vec<AttachmentRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT a.id, a.relative_path, a.mime_type, a.size, a.created_at
+             FROM attachments a
+             JOIN attachment_gc_candidates c ON c.attachment_id = a.id
+             WHERE NOT EXISTS(
+                SELECT 1 FROM clipboard_attachment_refs r WHERE r.attachment_id = a.id
+             )
+             AND NOT EXISTS(
+                SELECT 1 FROM notes n WHERE instr(n.content, 'attachment://' || a.id) > 0
+             )
+             AND NOT EXISTS(
+                SELECT 1 FROM note_versions v WHERE instr(v.content, 'attachment://' || a.id) > 0
+             )",
+        )?;
+        let records = stmt
+            .query_map([], attachment_from_row)?
+            .collect::<Result<Vec<_>>>()?;
+        Ok(records)
     }
 
     pub fn remove_attachment_record(&self, id: &str) -> Result<()> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
         let removed = tx.execute("DELETE FROM attachments WHERE id = ?1", params![id])?;
+        tx.execute(
+            "DELETE FROM attachment_gc_candidates WHERE attachment_id = ?1",
+            params![id],
+        )?;
         if removed > 0 {
             let now = Utc::now().to_rfc3339();
             enqueue_change(&tx, "attachment", id, "delete", &now)?;

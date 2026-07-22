@@ -55,6 +55,7 @@ impl Database {
                 is_deleted = 0",
             params![id, kind, normalized, preview, source_device, captured_at],
         )?;
+        replace_clipboard_attachment_refs_locked(&tx, &id, &normalized)?;
         enqueue_change(&tx, "clipboard", &id, "upsert", captured_at)?;
         let item = get_clipboard_item_locked(&tx, &id, true)?.expect("inserted clipboard item");
         prune_clipboard_items_locked(&tx, captured_at, true)?;
@@ -115,6 +116,7 @@ impl Database {
         let tx = conn.transaction()?;
         let changed = tx.execute("DELETE FROM clipboard_items WHERE id = ?1", params![id])?;
         if changed > 0 {
+            delete_clipboard_attachment_refs_locked(&tx, id)?;
             tx.execute(
                 "DELETE FROM sync_changes
                  WHERE entity_type = 'clipboard' AND entity_id = ?1 AND synced = 0",
@@ -142,6 +144,7 @@ impl Database {
 
         if changed > 0 {
             for id in &ids {
+                delete_clipboard_attachment_refs_locked(&tx, id)?;
                 enqueue_change(&tx, "clipboard", id, "delete", &now)?;
             }
         }
@@ -260,6 +263,9 @@ impl Database {
             remote_version.clone()
         };
         let changed = tx.execute("DELETE FROM clipboard_items WHERE id = ?1", params![id])?;
+        if changed > 0 {
+            delete_clipboard_attachment_refs_locked(&tx, id)?;
+        }
         set_entity_version_locked(&tx, "clipboard", id, &version_to_store, false)?;
         tx.commit()?;
         Ok(changed > 0)
@@ -285,6 +291,7 @@ fn prune_clipboard_items_locked(
     };
     for id in &ids {
         tx.execute("DELETE FROM clipboard_items WHERE id = ?1", params![id])?;
+        delete_clipboard_attachment_refs_locked(tx, id)?;
         if enqueue_deletes {
             tx.execute(
                 "DELETE FROM sync_changes

@@ -226,6 +226,15 @@ impl Database {
                 is_pinned INTEGER NOT NULL DEFAULT 0,
                 is_deleted INTEGER NOT NULL DEFAULT 0
             );
+            CREATE TABLE IF NOT EXISTS clipboard_attachment_refs (
+                clipboard_id TEXT NOT NULL,
+                attachment_id TEXT NOT NULL,
+                ordinal INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY(clipboard_id, attachment_id)
+            );
+            CREATE TABLE IF NOT EXISTS attachment_gc_candidates (
+                attachment_id TEXT PRIMARY KEY
+            );
             CREATE TABLE IF NOT EXISTS tags (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
@@ -246,6 +255,18 @@ impl Database {
                 ON sync_changes(synced, seq);
             CREATE INDEX IF NOT EXISTS idx_clipboard_recent
                 ON clipboard_items(is_deleted, is_pinned DESC, last_copied_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_clipboard_attachment_refs_attachment
+                ON clipboard_attachment_refs(attachment_id);
+            CREATE TRIGGER IF NOT EXISTS clipboard_attachment_ref_deleted
+                AFTER DELETE ON clipboard_attachment_refs BEGIN
+                    INSERT OR IGNORE INTO attachment_gc_candidates(attachment_id)
+                    VALUES(old.attachment_id);
+                END;
+            CREATE TRIGGER IF NOT EXISTS clipboard_attachment_ref_inserted
+                AFTER INSERT ON clipboard_attachment_refs BEGIN
+                    DELETE FROM attachment_gc_candidates
+                    WHERE attachment_id = new.attachment_id;
+                END;
             CREATE INDEX IF NOT EXISTS idx_tags_normalized
                 ON tags(normalized_name);
             CREATE INDEX IF NOT EXISTS idx_note_tags_tag
@@ -254,7 +275,20 @@ impl Database {
                 ON note_tags(note_id);",
         )?;
 
-        conn.pragma_update(None, "user_version", 5)?;
+        if schema_version < 6 {
+            let mut stmt = conn.prepare("SELECT id, content FROM clipboard_items")?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<Result<Vec<_>>>()?;
+            drop(stmt);
+            for (clipboard_id, content) in rows {
+                replace_clipboard_attachment_refs_locked(&conn, &clipboard_id, &content)?;
+            }
+        }
+
+        conn.pragma_update(None, "user_version", 6)?;
 
         // Create index on updated_at for sync
         conn.execute(
