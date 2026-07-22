@@ -70,6 +70,24 @@ fn clipboard_image_attachments_are_not_orphaned() {
 }
 
 #[test]
+fn clipboard_classifies_image_first_mixed_content_as_rich() {
+    let (_dir, db) = database();
+    let mixed = db
+        .capture_clipboard(
+            r#"<img src="https://example.com/image.png"><p>图片说明</p>"#,
+            "device-a",
+        )
+        .unwrap();
+    let image = db
+        .capture_clipboard(r#"<img src="https://example.com/image.png">"#, "device-a")
+        .unwrap();
+
+    assert_eq!(mixed.kind, "rich");
+    assert_eq!(mixed.preview, "图片说明");
+    assert_eq!(image.kind, "image");
+}
+
+#[test]
 fn bootstrap_can_requeue_historical_data_for_a_new_cloud_scope() {
     let (_dir, db) = database();
     let note = db.create_note("<p>历史数据</p>").unwrap();

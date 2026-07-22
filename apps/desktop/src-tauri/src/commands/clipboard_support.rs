@@ -1,5 +1,7 @@
 use super::*;
 
+const MAX_CLIPBOARD_IMAGE_RGBA_BYTES: usize = 64 * 1024 * 1024;
+
 pub(super) fn read_clipboard_image_html(
     app: &AppHandle,
     db: &Database,
@@ -10,7 +12,7 @@ pub(super) fn read_clipboard_image_html(
         Err(_) => return Ok(None),
     };
     let bytes = image.rgba();
-    if bytes.is_empty() || bytes.len() > 8 * 1024 * 1024 {
+    if !clipboard_image_buffer_is_supported(image.width(), image.height(), bytes.len()) {
         return Ok(None);
     }
     let mut png = Vec::new();
@@ -28,12 +30,79 @@ pub(super) fn read_clipboard_image_html(
     )))
 }
 
+fn clipboard_image_buffer_is_supported(width: u32, height: u32, byte_len: usize) -> bool {
+    let expected_len = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|pixels| pixels.checked_mul(4));
+    width > 0
+        && height > 0
+        && expected_len == Some(byte_len)
+        && byte_len <= MAX_CLIPBOARD_IMAGE_RGBA_BYTES
+}
+
+#[cfg(target_os = "windows")]
+pub(super) fn read_windows_clipboard_image_html_with_retry(
+    app: &AppHandle,
+    db: &Database,
+    paths: &AppPaths,
+) -> Result<Option<String>, String> {
+    const ATTEMPTS: usize = 6;
+    for attempt in 0..ATTEMPTS {
+        match read_clipboard_image_html(app, db, paths) {
+            Ok(Some(content)) => return Ok(Some(content)),
+            Err(error) if attempt + 1 == ATTEMPTS => return Err(error),
+            _ if attempt + 1 < ATTEMPTS => {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            _ => {}
+        }
+    }
+    Ok(None)
+}
+
 pub(super) fn clipboard_plain_text(item: &ClipboardItem) -> String {
     if item.kind == "rich" || item.kind == "image" {
         strip_html_tags(&item.content)
     } else {
         item.content.clone()
     }
+}
+
+pub(super) fn write_clipboard_image(
+    app: &AppHandle,
+    db: &Database,
+    paths: &AppPaths,
+    content: &str,
+) -> Result<bool, String> {
+    let Some(id) = attachment_id_from_image_html(content) else {
+        return Ok(false);
+    };
+    let record = db
+        .get_attachment(id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Clipboard image attachment was not found".to_string())?;
+    if !record.mime_type.starts_with("image/") {
+        return Err("Clipboard attachment is not an image".to_string());
+    }
+    let bytes = std::fs::read(paths.attachments_dir.join(record.relative_path))
+        .map_err(|e| format!("Failed to read clipboard image: {e}"))?;
+    let decoded = image::load_from_memory(&bytes)
+        .map_err(|e| format!("Failed to decode clipboard image: {e}"))?
+        .into_rgba8();
+    let (width, height) = decoded.dimensions();
+    let image = tauri::image::Image::new_owned(decoded.into_raw(), width, height);
+    app.clipboard()
+        .write_image(&image)
+        .map_err(|e| format!("Failed to write clipboard image: {e}"))?;
+    Ok(true)
+}
+
+fn attachment_id_from_image_html(content: &str) -> Option<&str> {
+    let start = content.find("attachment://")? + "attachment://".len();
+    let id = content[start..]
+        .split(|ch: char| !ch.is_ascii_hexdigit())
+        .next()?;
+    (id.len() == 64).then_some(id)
 }
 
 pub(super) fn strip_html_tags(content: &str) -> String {
@@ -165,13 +234,91 @@ pub(super) async fn read_windows_data_package_content(
 }
 
 #[cfg(target_os = "windows")]
+pub(super) fn windows_data_package_contains_bitmap(package: &DataPackageView) -> bool {
+    StandardDataFormats::Bitmap()
+        .ok()
+        .and_then(|format| package.Contains(&format).ok())
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "windows")]
+pub(super) fn read_preferred_windows_package_content(
+    package: &DataPackageView,
+    app: &AppHandle,
+    db: &Database,
+    paths: &AppPaths,
+) -> Result<Option<String>, String> {
+    let packaged = tauri::async_runtime::block_on(read_windows_data_package_content(package))?;
+    if !windows_data_package_contains_bitmap(package) {
+        // Some screenshot tools publish only native DIB/PNG clipboard formats.
+        // Windows clipboard history can display those images, but WinRT does not
+        // necessarily expose them as StandardDataFormats::Bitmap. If the package
+        // has no usable HTML/text/URI, probe the native clipboard image anyway.
+        return match packaged {
+            Some(content) => Ok(Some(content)),
+            None => read_windows_clipboard_image_html_with_retry(app, db, paths),
+        };
+    }
+
+    if packaged
+        .as_deref()
+        .is_some_and(clipboard_html_has_meaningful_text)
+    {
+        return Ok(packaged);
+    }
+
+    match read_windows_clipboard_image_html_with_retry(app, db, paths)? {
+        Some(image) => Ok(Some(image)),
+        None => Ok(packaged),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn clipboard_html_has_meaningful_text(content: &str) -> bool {
+    if !looks_like_visual_clipboard_html(content) {
+        return false;
+    }
+    let text = strip_html_tags(content);
+    let without_spacing_entities = text
+        .replace("&nbsp;", "")
+        .replace("&#32;", "")
+        .replace("&#160;", "")
+        .replace("&#x20;", "")
+        .replace("&#xa0;", "");
+    !without_spacing_entities.trim().is_empty()
+}
+
+#[cfg(target_os = "windows")]
 pub(super) fn normalize_windows_clipboard_html(content: &str) -> String {
     if let Some((_, fragment)) = content.split_once("<!--StartFragment-->") {
         if let Some((fragment, _)) = fragment.split_once("<!--EndFragment-->") {
             return fragment.trim().to_string();
         }
     }
+
+    if let Some(fragment) = clipboard_html_range(content, "StartFragment:", "EndFragment:") {
+        return fragment.trim().to_string();
+    }
+    if let Some(html) = clipboard_html_range(content, "StartHTML:", "EndHTML:") {
+        return html.trim().to_string();
+    }
     content.trim().to_string()
+}
+
+#[cfg(target_os = "windows")]
+fn clipboard_html_range<'a>(content: &'a str, start_key: &str, end_key: &str) -> Option<&'a str> {
+    let offset = |key: &str| {
+        content
+            .lines()
+            .find_map(|line| line.trim().strip_prefix(key))
+            .and_then(|value| value.trim().parse::<usize>().ok())
+    };
+    let start = offset(start_key)?;
+    let end = offset(end_key)?;
+    if start > end || end > content.len() {
+        return None;
+    }
+    content.get(start..end)
 }
 
 #[cfg(target_os = "windows")]
@@ -211,5 +358,69 @@ impl WindowsDateTimeExt for windows::Foundation::DateTime {
         chrono::DateTime::<chrono::Utc>::from_timestamp(seconds, nanos)
             .map(|value| value.to_rfc3339())
             .ok_or_else(|| "Failed to convert clipboard timestamp".to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_attachment_id_from_clipboard_image_html() {
+        let id = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let html = format!(r#"<img src="attachment://{id}" data-attachment-id="{id}">"#);
+        assert_eq!(attachment_id_from_image_html(&html), Some(id));
+    }
+
+    #[test]
+    fn accepts_full_screen_clipboard_images_but_rejects_oversized_buffers() {
+        let full_screen_len = 2400 * 1599 * 4;
+        assert!(clipboard_image_buffer_is_supported(
+            2400,
+            1599,
+            full_screen_len
+        ));
+        assert!(!clipboard_image_buffer_is_supported(
+            5000,
+            5000,
+            5000 * 5000 * 4
+        ));
+        assert!(!clipboard_image_buffer_is_supported(2400, 1599, 12));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn strips_cf_html_header_using_fragment_byte_offsets() {
+        let fragment = "<pre>mkdir&#32;-p&#32;data/postgres</pre>";
+        let header_template = concat!(
+            "Version:1.0\r\n",
+            "StartHTML:{start:010}\r\n",
+            "EndHTML:{end:010}\r\n",
+            "StartFragment:{start:010}\r\n",
+            "EndFragment:{end:010}\r\n",
+            "SourceURL:about:blank\r\n"
+        );
+        let provisional = header_template
+            .replace("{start:010}", "0000000000")
+            .replace("{end:010}", "0000000000");
+        let start = provisional.len();
+        let end = start + fragment.len();
+        let header = header_template
+            .replace("{start:010}", &format!("{start:010}"))
+            .replace("{end:010}", &format!("{end:010}"));
+        let cf_html = format!("{header}{fragment}");
+
+        assert_eq!(normalize_windows_clipboard_html(&cf_html), fragment);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn distinguishes_mixed_rich_content_from_an_image_wrapper() {
+        assert!(clipboard_html_has_meaningful_text(
+            "<p>说明文字</p><img src=\"https://example.com/image.png\">"
+        ));
+        assert!(!clipboard_html_has_meaningful_text(
+            "<div>&nbsp;</div><img src=\"https://example.com/image.png\">"
+        ));
     }
 }

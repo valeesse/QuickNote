@@ -83,7 +83,9 @@ pub(super) fn normalize_clipboard_content(content: &str) -> String {
 
 pub(super) fn classify_clipboard_content(content: &str) -> String {
     let trimmed = content.trim();
-    if trimmed.starts_with("data:image/") || trimmed.starts_with("<img ") {
+    if trimmed.starts_with("data:image/")
+        || (trimmed.starts_with("<img ") && strip_html_tags(trimmed).is_empty())
+    {
         "image".to_string()
     } else if looks_like_rich_clipboard(content) {
         "rich".to_string()

@@ -201,6 +201,7 @@ pub fn run() {
             let db_arc = app.state::<DatabaseState>().arc();
             let sync_service: Arc<SyncService> = app.state::<Arc<SyncService>>().inner().clone();
             let clipboard_capture_state = app.state::<ClipboardCaptureState>().inner().clone();
+            let app_paths: Arc<AppPaths> = app.state::<Arc<AppPaths>>().inner().clone();
 
             let device_id = sync_service
                 .get_config()
@@ -209,6 +210,7 @@ pub fn run() {
             commands::start_clipboard_monitor(
                 app.handle().clone(),
                 db_arc.clone(),
+                app_paths,
                 device_id,
                 clipboard_capture_state,
             );

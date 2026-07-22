@@ -56,6 +56,27 @@ pub fn capture_clipboard(
     paths: State<'_, Arc<AppPaths>>,
     capture_state: State<'_, ClipboardCaptureState>,
 ) -> Result<Option<ClipboardItem>, String> {
+    #[cfg(target_os = "windows")]
+    let content = if let Some(content) = Clipboard::GetContent()
+        .ok()
+        .and_then(|package| {
+            read_preferred_windows_package_content(&package, &app, &db, &paths).ok()
+        })
+        .flatten()
+    {
+        content
+    } else {
+        match app.clipboard().read_text() {
+            Ok(text) if !text.trim().is_empty() => text,
+            _ => match read_windows_clipboard_image_html_with_retry(&app, &db, &paths) {
+                Ok(Some(html)) => html,
+                Ok(None) => return Ok(None),
+                Err(error) => return Err(error),
+            },
+        }
+    };
+
+    #[cfg(not(target_os = "windows"))]
     let content = match app.clipboard().read_text() {
         Ok(text) if !text.trim().is_empty() => text,
         _ => match read_clipboard_image_html(&app, &db, &paths) {
@@ -119,6 +140,7 @@ pub fn list_clipboard_items(
 pub fn copy_clipboard_item(
     app: AppHandle,
     db: State<'_, DatabaseState>,
+    paths: State<'_, Arc<AppPaths>>,
     capture_state: State<ClipboardCaptureState>,
     id: String,
 ) -> Result<bool, String> {
@@ -128,15 +150,28 @@ pub fn copy_clipboard_item(
     capture_state.suppress_events.store(true, Ordering::Release);
     let result = (|| {
         let plain_text = clipboard_plain_text(&item);
+        let fingerprint_content = if item.kind == "image" {
+            &item.content
+        } else {
+            &plain_text
+        };
         *capture_state
             .fingerprint
             .lock()
             .map_err(|_| "clipboard capture state is unavailable".to_string())? =
-            Some(clipboard_fingerprint(&plain_text));
-        app.clipboard()
-            .write_text(plain_text.clone())
-            .map_err(|e| e.to_string())?;
-        if item.kind == "rich" || item.kind == "image" {
+            Some(clipboard_fingerprint(fingerprint_content));
+        if item.kind == "image" {
+            if !write_clipboard_image(&app, &db, &paths, &item.content)? {
+                app.clipboard()
+                    .write_html(item.content.clone(), Some(plain_text.clone()))
+                    .map_err(|e| e.to_string())?;
+            }
+        } else {
+            app.clipboard()
+                .write_text(plain_text.clone())
+                .map_err(|e| e.to_string())?;
+        }
+        if item.kind == "rich" {
             *capture_state
                 .fingerprint
                 .lock()
@@ -160,11 +195,13 @@ pub fn copy_clipboard_item(
 pub fn start_clipboard_monitor(
     app: AppHandle,
     db: Arc<Database>,
+    paths: Arc<AppPaths>,
     device_id: String,
     capture_state: ClipboardCaptureState,
 ) {
     #[cfg(not(target_os = "windows"))]
     {
+        let _ = paths;
         let poll_app = app.clone();
         let poll_db = db.clone();
         let poll_device_id = device_id.clone();
@@ -204,6 +241,7 @@ pub fn start_clipboard_monitor(
         let (sender, receiver) = std::sync::mpsc::channel::<DataPackageView>();
         let worker_app = app.clone();
         let worker_db = db;
+        let worker_paths = paths;
         let worker_state = capture_state.clone();
         let worker_device_id = device_id;
         std::thread::spawn(move || {
@@ -213,10 +251,14 @@ pub fn start_clipboard_monitor(
                 {
                     continue;
                 }
-                let Ok(Some(content)) =
-                    tauri::async_runtime::block_on(read_windows_data_package_content(&package))
-                else {
-                    continue;
+                let content = match read_preferred_windows_package_content(
+                    &package,
+                    &worker_app,
+                    &worker_db,
+                    &worker_paths,
+                ) {
+                    Ok(Some(content)) => content,
+                    _ => continue,
                 };
                 if let Ok(Some(item)) = capture_content_if_new(
                     &worker_db,
