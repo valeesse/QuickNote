@@ -29,6 +29,9 @@ interface ClipboardPanelProps {
   onCreateNoteFromItem?: (id: string) => void;
   /** Resolve attachment:// images before rendering clipboard HTML. */
   resolveAttachmentSrc?: (id: string) => Promise<string>;
+  hasMore?: boolean;
+  loadingMore?: boolean;
+  onLoadMore?: () => void;
 }
 
 export function ClipboardPanel({
@@ -48,6 +51,9 @@ export function ClipboardPanel({
   focusedItemId,
   onCreateNoteFromItem,
   resolveAttachmentSrc,
+  hasMore,
+  loadingMore,
+  onLoadMore,
 }: ClipboardPanelProps) {
   const [capturing, setCapturing] = useState(false);
   const [captureMessage, setCaptureMessage] = useState<string | null>(null);
@@ -161,6 +167,18 @@ export function ClipboardPanel({
               ))}
             </div>
           )}
+          {items.length > 0 && hasMore && onLoadMore && (
+            <div className="mt-5 flex justify-center">
+              <button
+                type="button"
+                disabled={loadingMore}
+                onClick={onLoadMore}
+                className="focus-ring rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+              >
+                {loadingMore ? "加载中..." : "加载更多"}
+              </button>
+            </div>
+          )}
         </div>
       </main>
     </div>
@@ -188,6 +206,30 @@ export const ClipboardCard = React.forwardRef<HTMLElement, {
   onCreateNote,
   resolveAttachmentSrc,
 }, ref) {
+  const elementRef = useRef<HTMLElement | null>(null);
+  const [shouldHydrate, setShouldHydrate] = useState(false);
+  const setElementRef = useCallback((element: HTMLElement | null) => {
+    elementRef.current = element;
+    if (typeof ref === "function") ref(element);
+    else if (ref) ref.current = element;
+  }, [ref]);
+
+  useEffect(() => {
+    const element = elementRef.current;
+    if (!element || shouldHydrate || !item.content.includes("attachment://")) return;
+    if (typeof IntersectionObserver === "undefined") {
+      setShouldHydrate(true);
+      return;
+    }
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry?.isIntersecting) {
+        setShouldHydrate(true);
+        observer.disconnect();
+      }
+    }, { rootMargin: "320px" });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [item.content, shouldHydrate]);
   const palette =
     item.kind === "link"
       ? "bg-blue-50 text-blue-700"
@@ -209,12 +251,12 @@ export const ClipboardCard = React.forwardRef<HTMLElement, {
   const isRich = item.kind === "rich" || item.kind === "image";
   const renderedHtml = useHydratedClipboardHtml(
     isRich ? item.content : "",
-    resolveAttachmentSrc,
+    shouldHydrate ? resolveAttachmentSrc : undefined,
   );
 
   return (
     <article
-      ref={ref}
+      ref={setElementRef}
       className={`clipboard-card group ${compact ? "clipboard-card--compact" : ""} ${focused ? "clipboard-card--focused" : ""}`}
       onContextMenu={(event) => {
         if (!onCreateNote) return;

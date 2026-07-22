@@ -94,7 +94,7 @@ function sanitizeClipboardHtml(html: string): string {
         element.removeAttribute(attr.name);
         continue;
       }
-      if ((name === "src" || name === "href") && !isSafeClipboardUrl(value)) {
+      if ((name === "src" || name === "href") && !isSafeClipboardUrl(value, name)) {
         element.removeAttribute(attr.name);
       }
     }
@@ -102,17 +102,23 @@ function sanitizeClipboardHtml(html: string): string {
       element.setAttribute("target", "_blank");
       element.setAttribute("rel", "noreferrer");
     }
+    if (element.tagName === "IMG") {
+      element.setAttribute("loading", "lazy");
+      element.setAttribute("decoding", "async");
+    }
   }
 
   return doc.body.innerHTML;
 }
 
-function isSafeClipboardUrl(value: string): boolean {
+function isSafeClipboardUrl(value: string, attribute: string): boolean {
+  if (attribute === "href") {
+    return value.startsWith("https://") || value.startsWith("http://");
+  }
   return (
     value.startsWith("data:image/") ||
-    value.startsWith("https://") ||
-    value.startsWith("http://") ||
     value.startsWith("asset:") ||
+    value.startsWith("http://asset.localhost/") ||
     value.startsWith("blob:")
   );
 }

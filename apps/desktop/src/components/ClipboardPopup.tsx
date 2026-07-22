@@ -1,6 +1,6 @@
 import { useEffect, useCallback, useState } from "react";
 import { useClipboard } from "@/hooks/useClipboard";
-import { invoke } from "@/utils/tauri";
+import { convertFileSrc, invoke } from "@/utils/tauri";
 import { hideCurrentWindow } from "@/utils/window";
 import { ClipboardCard } from "@ui/components/ClipboardPanel";
 import { Clipboard, Trash2, X, AlertTriangle } from "lucide-react";
@@ -17,6 +17,9 @@ export function ClipboardPopup() {
     deleteItem,
     clearClipboard,
     loadItems,
+    loadMore,
+    hasMore,
+    loadingMore,
     error,
   } = useClipboard();
   const [capturing, setCapturing] = useState(false);
@@ -183,6 +186,16 @@ export function ClipboardPopup() {
                 resolveAttachmentSrc={resolveClipboardAttachment}
               />
             ))}
+            {hasMore && (
+              <button
+                type="button"
+                disabled={loadingMore}
+                onClick={() => void loadMore()}
+                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-xs text-gray-500 hover:bg-gray-50 disabled:opacity-50"
+              >
+                {loadingMore ? "加载中..." : "加载更多"}
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -224,6 +237,6 @@ export function ClipboardPopup() {
 }
 
 async function resolveClipboardAttachment(id: string): Promise<string> {
-  const attachment = await invoke<{ id: string; data_url: string }>("get_attachment_data_url", { id });
-  return attachment.data_url;
+  const attachment = await invoke<{ id: string; path: string }>("get_attachment_preview", { id });
+  return convertFileSrc(attachment.path);
 }

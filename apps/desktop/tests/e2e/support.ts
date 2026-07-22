@@ -127,6 +127,9 @@ export async function installMockBackend(page: Page): Promise<void> {
         if (cmd === "get_attachment") {
           return { id: args.id, path: `C:\\QuickNote\\attachments\\${args.id}.webp` };
         }
+        if (cmd === "get_attachment_preview") {
+          return { id: args.id, path: `C:\\QuickNote\\attachments\\${args.id}.webp` };
+        }
         if (cmd === "cleanup_attachments") return 0;
         if (cmd === "clipboard_auto_capture_supported") return true;
         if (cmd === "set_clipboard_auto_capture_enabled") return args?.enabled ?? true;
@@ -162,9 +165,12 @@ export async function installMockBackend(page: Page): Promise<void> {
         }
         if (cmd === "list_clipboard_items") {
           const query = String(args.query || "").toLowerCase();
+          const offset = Number(args.offset || 0);
+          const limit = Number(args.limit || 50);
           return loadClipboard()
             .filter((item) => !item.is_deleted && item.content.toLowerCase().includes(query))
-            .sort((a, b) => Number(b.is_pinned) - Number(a.is_pinned) || b.last_copied_at.localeCompare(a.last_copied_at));
+            .sort((a, b) => Number(b.is_pinned) - Number(a.is_pinned) || b.last_copied_at.localeCompare(a.last_copied_at))
+            .slice(offset, offset + limit);
         }
         if (cmd === "copy_clipboard_item") {
           const items = loadClipboard();

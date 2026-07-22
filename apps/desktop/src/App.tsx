@@ -3,7 +3,7 @@ import { Sidebar } from "@/components/Sidebar";
 import { useNotes } from "@/hooks/useNotes";
 import { useSync } from "@/hooks/useSync";
 import { useClipboard } from "@/hooks/useClipboard";
-import { invoke } from "@/utils/tauri";
+import { convertFileSrc, invoke } from "@/utils/tauri";
 import { ClipboardPanel } from "@ui/components/ClipboardPanel";
 import { EmptyState } from "@ui/components/EmptyState";
 import { EditorSkeleton } from "@ui/components/EditorSkeleton";
@@ -28,7 +28,7 @@ export default function App() {
   } = useNotes();
   const clipboard = useClipboard();
   const resolveClipboardAttachment = useCallback(async (id: string) =>
-    (await invoke<{ id: string; data_url: string }>("get_attachment_data_url", { id })).data_url, []);
+    convertFileSrc((await invoke<{ id: string; path: string }>("get_attachment_preview", { id })).path), []);
   const [viewMode, setViewMode] = useState<AppView>("notes");
   const [showTrash, setShowTrash] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
@@ -188,6 +188,9 @@ export default function App() {
             focusedItemId={focusedClipboardItemId}
             onCreateNoteFromItem={(id) => void handleCreateNoteFromClipboard(id)}
             resolveAttachmentSrc={resolveClipboardAttachment}
+            hasMore={clipboard.hasMore}
+            loadingMore={clipboard.loadingMore}
+            onLoadMore={() => void clipboard.loadMore()}
           />
         ) : <>
           <div className="flex items-center gap-2 border-b border-gray-200 bg-white px-3 py-2 md:hidden">

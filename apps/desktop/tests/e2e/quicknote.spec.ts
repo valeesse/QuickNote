@@ -351,6 +351,63 @@ test("captures, searches, pins, copies, and deletes clipboard history", async ({
   await expect(page.getByText("暂无剪贴板记录")).toBeVisible();
 });
 
+test("pages clipboard history without loading the full collection", async ({ page }) => {
+  await page.evaluate(() => {
+    const items = Array.from({ length: 55 }, (_, index) => {
+      const timestamp = new Date(Date.UTC(2026, 0, 1, 0, 0, 55 - index)).toISOString();
+      return {
+        id: `clipboard-page-${index}`,
+        kind: "text",
+        content: `分页剪贴板 ${index}`,
+        preview: `分页剪贴板 ${index}`,
+        source_device: "e2e-device",
+        created_at: timestamp,
+        updated_at: timestamp,
+        last_copied_at: timestamp,
+        capture_count: 1,
+        is_pinned: false,
+        is_deleted: false,
+      };
+    });
+    localStorage.setItem("quicknote-e2e-clipboard-db", JSON.stringify(items));
+  });
+  await page.reload();
+  await page.getByRole("button", { name: "剪贴板" }).click();
+
+  await expect(page.locator(".clipboard-card")).toHaveCount(50);
+  await expect(page.getByText("分页剪贴板 54", { exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "加载更多" }).click();
+  await expect(page.locator(".clipboard-card")).toHaveCount(55);
+  await expect(page.locator(".clipboard-card").getByText("分页剪贴板 54", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "加载更多" })).toHaveCount(0);
+});
+
+test("hydrates local clipboard images without loading remote trackers", async ({ page }) => {
+  await page.evaluate(() => {
+    const timestamp = new Date().toISOString();
+    localStorage.setItem("quicknote-e2e-clipboard-db", JSON.stringify([{
+      id: "rich-image-item",
+      kind: "rich",
+      content: '<p>图文混排</p><img src="attachment://local-image" alt="本地图片"><img src="https://tracker.invalid/pixel.png" alt="远程图片">',
+      preview: "图文混排",
+      source_device: "e2e-device",
+      created_at: timestamp,
+      updated_at: timestamp,
+      last_copied_at: timestamp,
+      capture_count: 1,
+      is_pinned: false,
+      is_deleted: false,
+    }]));
+  });
+  await page.reload();
+  await page.getByRole("button", { name: "剪贴板" }).click();
+
+  const localImage = page.locator('.clipboard-card img[alt="本地图片"]');
+  const remoteImage = page.locator('.clipboard-card img[alt="远程图片"]');
+  await expect(localImage).toHaveAttribute("src", /asset:\/\/localhost/);
+  await expect(remoteImage).not.toHaveAttribute("src", /.+/);
+});
+
 test("provides mobile navigation and manual clipboard capture", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.getByRole("navigation")).toBeVisible();

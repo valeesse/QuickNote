@@ -161,6 +161,11 @@ pub fn run() {
 
             let attachments_dir = app_dir.join("attachments");
             std::fs::create_dir_all(&attachments_dir)?;
+            // Resolve and allow the exact runtime directory. `$APPDATA` already points at
+            // this application's data directory, so composing the identifier in config
+            // would produce a duplicated path and make every asset request return 403.
+            app.asset_protocol_scope()
+                .allow_directory(&attachments_dir, true)?;
             app.manage(Arc::new(AppPaths { attachments_dir }));
             Ok(())
         })

@@ -1,46 +1,68 @@
-# 跨平台剪贴板同步设计
+# 剪贴板实现架构
 
-## 产品范围
+## 数据流
 
-首版参考 PasteNow 的“历史卡片、搜索、固定和一键回填”交互，但继续使用 QuickNote
-现有的 React、Tauri、SQLite outbox、WebDAV 和版本向量，不引入第二套云端或账户系统。
+```mermaid
+flowchart LR
+  OS[系统剪贴板] --> CAP[平台采集器]
+  CAP --> NORM[格式选择、规范化与去重]
+  NORM --> DB[(SQLite 元数据与历史)]
+  NORM --> FS[附件目录：原始二进制]
+  DB --> OUTBOX[同步 Outbox]
+  FS --> DAV[WebDAV 附件对象]
+  OUTBOX --> DAV
+  DB --> API[Tauri 分页命令]
+  FS --> PREVIEW[按需缩略图]
+  API --> UI[React 剪贴板面板]
+  PREVIEW --> UI
+```
 
-支持文本、URL 和代码片段，单条上限 1 MB。图片、文件和富文本暂不采集；这些类型在
-iOS、Android 与桌面平台的权限和数据表示差异较大，后续应复用现有内容寻址附件协议单独设计。
+图片二进制不写入 SQLite。数据库中的 `attachments` 只保存内容哈希、MIME、大小和相对路径；
+原图保存在应用附件目录，同步时作为独立 WebDAV 对象传输。剪贴板 HTML 使用
+`attachment://<id>` 引用图片，`clipboard_attachment_refs` 对引用进行规范化索引，避免在清理、
+同步和孤儿检测时反复扫描所有 HTML。
 
-## 平台策略
+## 采集与格式优先级
 
-| 平台 | 读取 | 写入 | 采集策略 |
-| --- | --- | --- | --- |
-| Windows | Tauri clipboard-manager | Tauri clipboard-manager | 窗口前台每 1.5 秒检查，可暂停 |
-| macOS | Tauri clipboard-manager | Tauri clipboard-manager | 窗口前台每 1.5 秒检查，可暂停 |
-| Android | Tauri Android clipboard binding | Tauri Android clipboard binding | 仅用户点击“读取当前剪贴板” |
-| iOS | Tauri iOS clipboard binding | Tauri iOS clipboard binding | 仅用户点击读取，遵循系统粘贴提示 |
+- Windows 使用系统 `Clipboard.ContentChanged` 事件，不轮询。事件通过容量 32 的有界队列进入单一
+  工作线程，并按系统剪贴板序列号过滤重复通知，避免复制风暴造成无限积压。
+- Windows 优先读取注册的原生 `PNG` 格式并直接落盘；没有 PNG 时再读取 RGBA/DIB 并编码。
+  这保留截图软件提供的压缩数据，减少一次大图解码和重编码。
+- `HTML Format` 按 CF_HTML 的字节偏移解析，不会再把 `Version:1.0 StartHTML:...` 头部当成正文。
+- 图文混排优先保存富文本；只有单一图片包装器才归类为图片。纯文本、URL、代码、富文本和图片
+  仍共享同一条历史、去重、固定和同步流程。
+- macOS/Linux 使用 1.5 秒低频轮询作为兼容路径；移动端只响应用户显式读取，遵循系统隐私限制。
 
-移动端不尝试后台监听，避免违反系统隐私限制和产生重复授权提示。全平台均使用同一组
-Rust commands，前端不直接依赖平台 API。
+## 存储、引用与回收
 
-## 数据与同步
+- `clipboard_items` 保存规范化文本或 HTML，单条上限 5 MB，最多保留 500 条非删除记录。
+- 内容 ID 基于规范化内容的 SHA-256；相同内容再次复制会更新次数和最近时间，而不是复制一整行。
+- `clipboard_attachment_refs` 是剪贴板条目到附件的显式多对多引用表。
+- 删除、清空、历史裁剪或远端覆盖会把失去引用的附件放入 `attachment_gc_candidates`。清理器再次检查
+  便签、版本和剪贴板引用后，才删除原图、缩略图和附件记录，避免误删共享图片。
+- 图片预览首次进入视口附近时生成最大 640×480 的 PNG 缩略图。UI 通过本地 asset URL 加载，列表
+  不再为每张图片传输 base64，也不会在首屏解码全部原图。
 
-- `clipboard_items.id` 是规范化文本的 SHA-256，跨设备天然去重。
-- 类型仅用于展示：`text`、`link`、`code`。
-- 固定、软删除、来源设备和采集次数随条目同步。
-- `sync_changes.entity_type = clipboard`，envelope 继续使用 schema v2 版本向量。
-- 首次连接 endpoint 时，现有剪贴板条目随 notes 和 attachments 一起 bootstrap。
-- 并发固定/删除使用同一确定性因果裁决，不使用设备墙钟决定胜负。
+## 查询与前端更新
 
-## 隐私与可靠性
+- 历史命令使用 `LIMIT/OFFSET` 分页，默认每页 50 条；搜索同样分页。
+- Windows 自动采集事件携带新增条目，前端直接做有序 upsert，不再每次复制都重新查询整表。
+- 卡片使用 `IntersectionObserver` 在接近视口时解析附件，降低长列表的文件 IO 与图片解码开销。
+- 富文本渲染会清理脚本、事件属性和危险 URL。远程 HTTP 图片不会自动加载，避免打开历史时泄露
+  IP 或触发跟踪；普通 HTTPS 链接仍可点击。
 
-- 自动采集只在桌面窗口可见且聚焦时运行，并可在界面中暂停。
-- 移动端始终要求显式用户动作。
-- 平台命令保存当前内容指纹，应用自身复制不会形成采集反馈循环。
-- 空内容被忽略；超出 1 MB 的文本拒绝入库。
-- WebDAV 仅允许 HTTPS 配置，但远端 change 仍是服务端可读 JSON，不是端到端加密。
-  对高敏感剪贴板数据，发布前应继续增加端到端加密或可配置排除规则。
+## 写回系统剪贴板
 
-## 验证边界
+- 图片条目同时写入系统图片格式、HTML 和纯文本回退，Windows 剪贴板历史可识别为图片。
+- 富文本只执行一次原子写入；其中的本地 `attachment://` 图片在写出边界转换为 data URL，使外部应用
+  能粘贴完整图文内容。数据库和 UI 内部仍使用附件引用，不持久化 base64。
+- 应用自身写回期间暂停采集并更新内容指纹，避免形成反馈循环。
 
-Windows 已完成 Rust 编译、浏览器端功能测试和响应式移动视口测试。官方
-`tauri-plugin-clipboard-manager` 2.3.2 源码包含 Windows/macOS desktop backend 以及
-Android/iOS mobile binding。当前 Windows 环境缺少 Android SDK/NDK，且不能运行 iOS
-工具链，因此 Android/iOS/macOS 仍需各平台 CI 或真机完成最终打包和系统权限验证。
+## 同步与平台边界
+
+剪贴板条目继续复用 SQLite outbox、WebDAV 和版本向量；附件先作为独立对象上传，条目只同步引用。
+并发固定、删除和更新使用因果版本裁决，不依赖设备墙钟决定胜负。远端 change 是服务端可读 JSON，
+尚未提供端到端加密，高敏感数据仍应配置排除或在后续增加加密层。
+
+Windows 需要覆盖文本、CF_HTML、单图、图文混排、大尺寸截图以及截图软件快捷键；macOS、Linux、
+Android 和 iOS 的系统权限与真实格式仍需在对应平台 CI 或真机完成最终验收。
