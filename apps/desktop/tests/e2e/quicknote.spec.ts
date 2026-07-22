@@ -475,6 +475,59 @@ test("renders formatted text in a compact masonry layout", async ({ page }) => {
   }).toBe(true);
 });
 
+test("returns quickly to the top of notes and clipboard history", async ({ page }) => {
+  await page.setViewportSize({ width: 1_000, height: 700 });
+  await page.evaluate(() => {
+    const now = new Date().toISOString();
+    localStorage.setItem("quicknote-e2e-db", JSON.stringify([{
+      id: "long-note",
+      title: "长便签",
+      content: Array.from({ length: 80 }, (_, index) => `<p>便签内容第 ${index + 1} 行</p>`).join(""),
+      is_pinned: false,
+      created_at: now,
+      updated_at: now,
+      version: 1,
+      is_deleted: false,
+      tags: [],
+    }]));
+    localStorage.setItem("quicknote-e2e-clipboard-db", JSON.stringify(
+      Array.from({ length: 40 }, (_, index) => ({
+        id: `scroll-clipboard-${index}`,
+        kind: "text",
+        content: `用于滚动测试的剪贴板内容 ${index + 1}`,
+        preview: `用于滚动测试的剪贴板内容 ${index + 1}`,
+        source_device: "e2e-device",
+        created_at: now,
+        updated_at: now,
+        last_copied_at: new Date(Date.now() - index * 1_000).toISOString(),
+        capture_count: 1,
+        is_pinned: false,
+        is_deleted: false,
+      })),
+    ));
+  });
+  await page.reload();
+  await noteItem(page, "长便签").click();
+
+  const noteScroller = page.locator(".editor-shell__scroller");
+  const topButton = page.getByRole("button", { name: "返回顶部" });
+  await expect(noteScroller).toBeVisible();
+  await expect(topButton).toHaveCount(0);
+  await noteScroller.evaluate((element) => element.scrollTo({ top: element.scrollHeight, behavior: "auto" }));
+  await expect(topButton).toBeVisible();
+  await topButton.click();
+  await expect.poll(() => noteScroller.evaluate((element) => element.scrollTop)).toBeLessThanOrEqual(1);
+
+  await page.getByRole("button", { name: "剪贴板" }).click();
+  const clipboardScroller = page.locator(".clipboard-panel__body");
+  await expect(clipboardScroller).toBeVisible();
+  await expect(topButton).toHaveCount(0);
+  await clipboardScroller.evaluate((element) => element.scrollTo({ top: element.scrollHeight, behavior: "auto" }));
+  await expect(topButton).toBeVisible();
+  await topButton.click();
+  await expect.poll(() => clipboardScroller.evaluate((element) => element.scrollTop)).toBeLessThanOrEqual(1);
+});
+
 test("provides mobile navigation and manual clipboard capture", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.getByRole("navigation")).toBeVisible();

@@ -1,10 +1,11 @@
 import { Search } from "lucide-react";
 import type { ReactNode } from "react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { Note, SaveStatus, TagSummary } from "@contracts";
 import { formatSaveStatus } from "../utils/format";
 import { FindReplacePanel } from "./FindReplacePanel";
 import { Toolbar, ToolbarButton } from "./Toolbar";
+import { ScrollToTopButton } from "./ScrollToTopButton";
 import type { FindReplaceControls } from "../hooks/useFindReplace";
 
 export function EditorShell({
@@ -33,6 +34,7 @@ export function EditorShell({
   children: ReactNode;
 }) {
   const [tagInput, setTagInput] = useState("");
+  const scrollRef = useRef<HTMLDivElement | null>(null);
   const noteTags = note.tags ?? [];
   const normalizedInput = normalizeTagName(tagInput);
   const matchingTags = useMemo(
@@ -76,7 +78,11 @@ export function EditorShell({
 
       {findReplace.visible && <FindReplacePanel controls={findReplace} />}
 
-      <div className="flex-1 overflow-y-auto" onDoubleClick={() => editor.chain().focus("end").run()}>
+      <div
+        ref={scrollRef}
+        className="editor-shell__scroller flex-1 overflow-y-auto"
+        onDoubleClick={() => editor.chain().focus("end").run()}
+      >
         <div className="px-8 pb-1 pt-3">
           <div className="relative flex min-h-8 flex-wrap items-center gap-2 text-xs">
             {noteTags.map((tag) => (
@@ -131,6 +137,8 @@ export function EditorShell({
         </div>
         {children}
       </div>
+
+      <ScrollToTopButton targetRef={scrollRef} className="scroll-to-top--editor" />
 
       <div className="flex items-center justify-between gap-3 border-t border-gray-100 px-8 py-2 text-xs text-gray-400">
         <span>

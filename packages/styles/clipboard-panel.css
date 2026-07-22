@@ -1,5 +1,6 @@
 /* Clipboard panel */
 .clipboard-panel {
+  position: relative;
   display: flex;
   height: 100%;
   min-width: 0;

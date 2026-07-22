@@ -4,6 +4,7 @@ import type { ClipboardItem } from "@contracts";
 import { formatRelativeTime } from "../utils/format";
 import { shortDevice, useHydratedClipboardHtml } from "./clipboardHtml";
 import { clipboardKindLabel } from "../utils/clipboard";
+import { ScrollToTopButton } from "./ScrollToTopButton";
 
 interface ClipboardPanelProps {
   items: ClipboardItem[];
@@ -59,6 +60,7 @@ export function ClipboardPanel({
   const [capturing, setCapturing] = useState(false);
   const [captureMessage, setCaptureMessage] = useState<string | null>(null);
   const gridRef = useRef<HTMLDivElement | null>(null);
+  const bodyRef = useRef<HTMLElement | null>(null);
   const cardRefs = useRef(new Map<string, HTMLElement>());
 
   const handleCapture = useCallback(async () => {
@@ -183,7 +185,7 @@ export function ClipboardPanel({
         </div>
       </header>
 
-      <main className="clipboard-panel__body">
+      <main ref={bodyRef} className="clipboard-panel__body">
         <div className="clipboard-panel__shell">
           {items.length === 0 ? (
             <div className="clipboard-panel__empty">
@@ -230,6 +232,7 @@ export function ClipboardPanel({
           )}
         </div>
       </main>
+      <ScrollToTopButton targetRef={bodyRef} />
     </div>
   );
 }
