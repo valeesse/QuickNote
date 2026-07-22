@@ -135,6 +135,20 @@ fn clipboard_classifies_image_first_mixed_content_as_rich() {
 }
 
 #[test]
+fn clipboard_classifies_formatted_text_without_images_as_rich() {
+    let (_dir, db) = database();
+    let formatted = db
+        .capture_clipboard(
+            r#"<p><span style="font-weight:bold">仅格式文本</span></p>"#,
+            "device-a",
+        )
+        .unwrap();
+
+    assert_eq!(formatted.kind, "rich");
+    assert_eq!(formatted.preview, "仅格式文本");
+}
+
+#[test]
 fn bootstrap_can_requeue_historical_data_for_a_new_cloud_scope() {
     let (_dir, db) = database();
     let note = db.create_note("<p>历史数据</p>").unwrap();

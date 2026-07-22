@@ -66,21 +66,41 @@ function sanitizeClipboardHtml(html: string): string {
   const allowedTags = new Set([
     "A",
     "B",
+    "BLOCKQUOTE",
     "BR",
     "CODE",
     "DIV",
     "EM",
+    "H1",
+    "H2",
+    "H3",
+    "H4",
+    "H5",
+    "H6",
+    "HR",
     "I",
     "IMG",
     "LI",
+    "MARK",
     "OL",
     "P",
     "PRE",
+    "S",
     "SPAN",
     "STRONG",
+    "SUB",
+    "SUP",
+    "TABLE",
+    "TBODY",
+    "TD",
+    "TFOOT",
+    "TH",
+    "THEAD",
+    "TR",
+    "U",
     "UL",
   ]);
-  const allowedAttrs = new Set(["alt", "href", "src", "title"]);
+  const allowedAttrs = new Set(["alt", "colspan", "href", "rowspan", "src", "style", "title"]);
 
   for (const element of Array.from(doc.body.querySelectorAll("*"))) {
     if (!allowedTags.has(element.tagName)) {
@@ -96,6 +116,12 @@ function sanitizeClipboardHtml(html: string): string {
       }
       if ((name === "src" || name === "href") && !isSafeClipboardUrl(value, name)) {
         element.removeAttribute(attr.name);
+      } else if (name === "style") {
+        const style = sanitizeInlineStyle(value);
+        if (style) element.setAttribute("style", style);
+        else element.removeAttribute("style");
+      } else if ((name === "colspan" || name === "rowspan") && !isSafeTableSpan(value)) {
+        element.removeAttribute(attr.name);
       }
     }
     if (element.tagName === "A") {
@@ -109,6 +135,46 @@ function sanitizeClipboardHtml(html: string): string {
   }
 
   return doc.body.innerHTML;
+}
+
+const SAFE_STYLE_PROPERTIES = [
+  "background-color",
+  "color",
+  "font-family",
+  "font-style",
+  "font-weight",
+  "text-align",
+  "text-decoration",
+] as const;
+
+function sanitizeInlineStyle(value: string): string {
+  const probe = document.createElement("span");
+  probe.setAttribute("style", value);
+  const safe: string[] = [];
+  for (const property of SAFE_STYLE_PROPERTIES) {
+    const candidate = probe.style.getPropertyValue(property).trim();
+    if (candidate && isSafeStyleValue(property, candidate)) {
+      safe.push(`${property}: ${candidate}`);
+    }
+  }
+  return safe.join("; ");
+}
+
+function isSafeStyleValue(property: typeof SAFE_STYLE_PROPERTIES[number], value: string): boolean {
+  if (/[;{}]|url\s*\(|expression\s*\(|var\s*\(/i.test(value)) return false;
+  if (property === "font-weight") return /^(normal|bold|bolder|lighter|[1-9]00)$/i.test(value);
+  if (property === "font-style") return /^(normal|italic|oblique)$/i.test(value);
+  if (property === "text-align") return /^(left|right|center|justify|start|end)$/i.test(value);
+  if (property === "text-decoration") {
+    return /^(none|underline|overline|line-through)(\s+(underline|overline|line-through))*$/i.test(value);
+  }
+  if (property === "font-family") return /^[\p{L}\p{N}\s,'"_-]+$/u.test(value);
+  return /^(#[0-9a-f]{3,8}|[a-z]+|(rgb|rgba|hsl|hsla)\([\d\s.,%+-]+\))$/i.test(value);
+}
+
+function isSafeTableSpan(value: string): boolean {
+  const span = Number(value);
+  return Number.isInteger(span) && span >= 1 && span <= 100;
 }
 
 function isSafeClipboardUrl(value: string, attribute: string): boolean {

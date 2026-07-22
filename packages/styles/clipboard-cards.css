@@ -1,5 +1,6 @@
 .clipboard-card {
   display: flex;
+  align-self: start;
   min-height: 144px;
   min-width: 0;
   max-width: 100%;
@@ -97,6 +98,23 @@
   overflow-wrap: anywhere;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.clipboard-card__rich :where(h1, h2, h3, h4, h5, h6, blockquote) {
+  max-width: 100%;
+  margin: 0 0 8px;
+}
+
+.clipboard-card__rich :where(table) {
+  max-width: 100%;
+  border-collapse: collapse;
+  font-size: 0.75rem;
+}
+
+.clipboard-card__rich :where(th, td) {
+  border: 1px solid #e5e7eb;
+  padding: 3px 6px;
+  text-align: left;
 }
 
 .clipboard-card__rich :where(img) {

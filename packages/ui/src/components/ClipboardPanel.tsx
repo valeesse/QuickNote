@@ -3,6 +3,7 @@ import { Search, Pin, PinOff, Copy, Clipboard, Trash2 } from "lucide-react";
 import type { ClipboardItem } from "@contracts";
 import { formatRelativeTime } from "../utils/format";
 import { shortDevice, useHydratedClipboardHtml } from "./clipboardHtml";
+import { clipboardKindLabel } from "../utils/clipboard";
 
 interface ClipboardPanelProps {
   items: ClipboardItem[];
@@ -238,16 +239,7 @@ export const ClipboardCard = React.forwardRef<HTMLElement, {
         : item.kind === "image" || item.kind === "rich"
           ? "bg-rose-50 text-rose-700"
           : "bg-violet-50 text-violet-700";
-  const label =
-    item.kind === "link"
-      ? "链接"
-      : item.kind === "code"
-        ? "代码"
-        : item.kind === "image"
-          ? "图片"
-          : item.kind === "rich"
-            ? "图文"
-            : "文本";
+  const label = clipboardKindLabel(item);
   const isRich = item.kind === "rich" || item.kind === "image";
   const renderedHtml = useHydratedClipboardHtml(
     isRich ? item.content : "",

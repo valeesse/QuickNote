@@ -204,11 +204,18 @@ fn notify(state: &AppState, user_id: uuid::Uuid, id: &str, operation: &str) {
 }
 
 fn detect_kind(content: &str) -> String {
-    if content.starts_with("data:image/") || content.starts_with("<img ") {
+    let trimmed = content.trim();
+    let lowered = trimmed.to_ascii_lowercase();
+    let starts_with_image = lowered.starts_with("<img ") || lowered.starts_with("<img>");
+    if trimmed.starts_with("data:image/")
+        || (starts_with_image && strip_html_tags(trimmed).trim().is_empty())
+    {
         "image".into()
     } else if looks_like_rich_clipboard(content) {
         "rich".into()
-    } else if content.starts_with("http://") || content.starts_with("https://") {
+    } else if (trimmed.starts_with("http://") || trimmed.starts_with("https://"))
+        && !trimmed.chars().any(char::is_whitespace)
+    {
         "link".into()
     } else if content.contains("fn ") || content.contains("function ") || content.contains("=>") {
         "code".into()
@@ -226,6 +233,16 @@ fn looks_like_rich_clipboard(content: &str) -> bool {
         || lowered.contains("<li")
         || lowered.contains("<pre")
         || lowered.contains("<code")
+        || lowered.contains("<strong")
+        || lowered.contains("<span")
+        || lowered.contains("<em")
+        || lowered.contains("<b>")
+        || lowered.contains("<i>")
+        || lowered.contains("<u>")
+        || lowered.contains("<s>")
+        || lowered.contains("<mark")
+        || lowered.contains("<sub")
+        || lowered.contains("<sup")
         || lowered.contains("<blockquote")
         || lowered.contains("<figure")
         || lowered.contains("<br")
@@ -272,4 +289,22 @@ fn strip_html_tags(content: &str) -> String {
         }
     }
     output.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+#[cfg(test)]
+mod clipboard_kind_tests {
+    use super::*;
+
+    #[test]
+    fn distinguishes_formatted_text_mixed_content_and_image_only_html() {
+        assert_eq!(
+            detect_kind(r#"<p><span style="font-weight:bold">格式文本</span></p>"#),
+            "rich"
+        );
+        assert_eq!(
+            detect_kind(r#"<img src="attachment://image"><p>图片说明</p>"#),
+            "rich"
+        );
+        assert_eq!(detect_kind(r#"<img src="attachment://image">"#), "image");
+    }
 }

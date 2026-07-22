@@ -3,6 +3,7 @@ import { Clipboard } from "lucide-react";
 import type { ClipboardItem } from "@contracts";
 import { formatRelativeTime } from "../../utils/format";
 import { stripHtml, stripMarkdown } from "../../utils/html";
+import { clipboardKindLabel } from "../../utils/clipboard";
 
 export function ClipboardSidebar({
   items,
@@ -67,20 +68,12 @@ export function ClipboardSidebarItem({
       onContextMenu={(event) => onContextMenu(event, item.id)}
     >
       <span className="clipboard-sidebar__item-title">
-        <span>{clipboardKindLabel(item.kind)}</span>
+        <span>{clipboardKindLabel(item)}</span>
         <span className="text-[10px] font-normal text-gray-400">{formatRelativeTime(item.last_copied_at)}</span>
       </span>
       <span className="clipboard-sidebar__item-text">{stripClipboardPreview(item)}</span>
     </button>
   );
-}
-
-function clipboardKindLabel(kind: ClipboardItem["kind"]): string {
-  if (kind === "link") return "链接";
-  if (kind === "code") return "代码";
-  if (kind === "image") return "图片";
-  if (kind === "rich") return "图文";
-  return "文本";
 }
 
 function stripClipboardPreview(item: ClipboardItem): string {

@@ -408,6 +408,54 @@ test("hydrates local clipboard images without loading remote trackers", async ({
   await expect(remoteImage).not.toHaveAttribute("src", /.+/);
 });
 
+test("renders formatted text as rich text and sizes each card independently", async ({ page }) => {
+  await page.evaluate(() => {
+    const recent = new Date().toISOString();
+    const older = new Date(Date.now() - 1_000).toISOString();
+    const item = (id: string, content: string, timestamp: string) => ({
+      id,
+      kind: "rich",
+      content,
+      preview: content,
+      source_device: "e2e-device",
+      created_at: timestamp,
+      updated_at: timestamp,
+      last_copied_at: timestamp,
+      capture_count: 1,
+      is_pinned: false,
+      is_deleted: false,
+    });
+    localStorage.setItem("quicknote-e2e-clipboard-db", JSON.stringify([
+      item(
+        "short-formatted",
+        '<p><span style="font-weight: bold; color: rgb(255, 0, 0); position: fixed">短富文本</span></p>',
+        recent,
+      ),
+      item(
+        "long-formatted",
+        `<pre>${Array.from({ length: 18 }, (_, index) => `格式代码行 ${index + 1}`).join("\n")}</pre>`,
+        older,
+      ),
+    ]));
+  });
+  await page.reload();
+  await page.getByRole("button", { name: "剪贴板" }).click();
+
+  const shortCard = page.locator(".clipboard-card").filter({ hasText: "短富文本" });
+  const longCard = page.locator(".clipboard-card").filter({ hasText: "格式代码行 18" });
+  await expect(shortCard.getByText("富文本", { exact: true })).toBeVisible();
+  await expect(longCard.getByText("富文本", { exact: true })).toBeVisible();
+  const formattedSpan = shortCard.locator("span").filter({ hasText: "短富文本" }).last();
+  await expect(formattedSpan).toHaveCSS("font-weight", "700");
+  await expect(formattedSpan).toHaveCSS("color", "rgb(255, 0, 0)");
+  await expect(formattedSpan).not.toHaveCSS("position", "fixed");
+  const [shortHeight, longHeight] = await Promise.all([
+    shortCard.evaluate((element) => element.getBoundingClientRect().height),
+    longCard.evaluate((element) => element.getBoundingClientRect().height),
+  ]);
+  expect(shortHeight).toBeLessThan(longHeight - 40);
+});
+
 test("provides mobile navigation and manual clipboard capture", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.getByRole("navigation")).toBeVisible();

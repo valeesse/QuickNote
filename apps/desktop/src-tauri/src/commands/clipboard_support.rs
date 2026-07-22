@@ -380,6 +380,16 @@ pub(super) fn looks_like_visual_clipboard_html(content: &str) -> bool {
         || lowered.contains("<li")
         || lowered.contains("<pre")
         || lowered.contains("<code")
+        || lowered.contains("<strong")
+        || lowered.contains("<span")
+        || lowered.contains("<em")
+        || lowered.contains("<b>")
+        || lowered.contains("<i>")
+        || lowered.contains("<u>")
+        || lowered.contains("<s>")
+        || lowered.contains("<mark")
+        || lowered.contains("<sub")
+        || lowered.contains("<sup")
         || lowered.contains("<blockquote")
         || lowered.contains("<figure")
         || lowered.contains("<br")
@@ -471,5 +481,14 @@ mod tests {
         assert!(!clipboard_html_has_meaningful_text(
             "<div>&nbsp;</div><img src=\"https://example.com/image.png\">"
         ));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn preserves_single_inline_formatted_html_from_word_or_a_browser() {
+        assert!(looks_like_visual_clipboard_html(
+            "<p><span style=\"font-weight:bold;color:red\">格式文本</span></p>"
+        ));
+        assert!(looks_like_visual_clipboard_html("<strong>粗体</strong>"));
     }
 }
